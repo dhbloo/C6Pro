@@ -33,7 +33,7 @@ public:
     bool isMainThread() const { return id_ == 0; }
     /// Clear the thread state between two search.
     virtual void clear(bool newGame);
-    /// The main search function entry point.
+    /// The search function that every thread will run.
     virtual void search();
     /// Setup the game state in this thread, and update the evaluator.
     virtual void setStateAndEvaluator(const State &st);
@@ -50,8 +50,8 @@ public:
     // ----------------------------------------------------
     // Thread-related statistics
 
-    /// The number of visits in the current search.
-    std::atomic<uint64_t> numVisits;
+    /// The number of incremented visits in the current search.
+    std::atomic<uint64_t> numNewVisits;
     /// The number of playouts in the current search.
     std::atomic<uint64_t> numPlayouts;
     /// The maximal search depth reached in the current thread.
@@ -105,10 +105,10 @@ public:
     /// The start time point.
     Time startTime;
     /// The optimal and maximal elapsed time allowed for this turn.
-    Time optimalTime, maximalTime;
-    // The last number of playouts that we have printed search outputs.
-    uint64_t lastOutputPlayouts;
-    // The last time that we have printed search outputs.
+    Time optimumTime, maximumTime;
+    // The last number of newVisits and playouts that we printed search outputs.
+    uint64_t lastOutputNewVisits, lastOutputPlayouts;
+    // The last time that we printed search outputs.
     Time lastOutputTime;
 
     friend class ThreadPool;  // Allow ThreadPool to access private members
@@ -143,8 +143,8 @@ public:
                        std::function<void()> onStop = nullptr);
     /// Get the main search thread, which is the first thread in the pool.
     MainSearchThread *main() const { return static_cast<MainSearchThread *>(front().get()); }
-    /// Get the number of total visits searched.
-    uint64_t visitsSearched() const { return accumulate(&SearchThread::numVisits); }
+    /// Get the number of total incremented visits searched.
+    uint64_t newVisitsSearched() const { return accumulate(&SearchThread::numNewVisits); }
     /// Get the number of total playouts searched.
     uint64_t playoutsSearched() const { return accumulate(&SearchThread::numPlayouts); }
 

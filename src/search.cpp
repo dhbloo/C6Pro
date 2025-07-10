@@ -10,8 +10,10 @@
 
 namespace TimeControl {
 
-std::pair<Time, Time> getOptimalAndMaximalTime(const SearchOptions &options)
+std::pair<Time, Time> getOptimalAndMaximalTime(const MainSearchThread &th)
 {
+    auto &options = th.sharedSearchState->options;
+
     Time matchTimeLeft = options.timeLeft;
     if (options.maxMatchTime == 0)  // unlimited match time
         matchTimeLeft = std::numeric_limits<Time>::max();
@@ -19,7 +21,10 @@ std::pair<Time, Time> getOptimalAndMaximalTime(const SearchOptions &options)
     Time maximumTime = Time(matchTimeLeft / MatchSpaceMin);
     maximumTime      = std::min(options.maxTurnTime, maximumTime);
     maximumTime      = std::max(maximumTime - TurnTimeReservedMilliseconds, (Time)0);
-    Time optimumTime = Time(maximumTime * AdvancedStopRatio);
+
+    float timeCapRatio =
+        (th.rootMoves.size() == 1) ? SingularRootTimeCapRatio : LastPlayoutTimeCapRatio;
+    Time optimumTime = Time(maximumTime * timeCapRatio);
 
     return {optimumTime, maximumTime};
 }
@@ -41,8 +46,9 @@ std::ostream &operator<<(std::ostream &out, const std::vector<Move> &pv)
 void printRootMoves(MainSearchThread &th, size_t numRootMovesToDisplay)
 {
     FormatGuard fg(std::cout);
-    Time        elapsed = Now() - th.startTime;
-    uint64_t    visits  = th.sss.pool.visitsSearched();
+    Time        elapsed   = Now() - th.startTime;
+    uint64_t    newVisits = th.sss.pool.newVisitsSearched();
+    uint64_t    playouts  = th.sss.pool.playoutsSearched();
 
     for (size_t pvIdx = 0; pvIdx < std::min(numRootMovesToDisplay, th.rootMoves.size()); pvIdx++) {
         RootMove &curMove = th.rootMoves[pvIdx];
@@ -50,12 +56,13 @@ void printRootMoves(MainSearchThread &th, size_t numRootMovesToDisplay)
         std::cout << std::fixed << std::setprecision(2);
         std::cout << "(" << pvIdx + 1 << ") " << curMove.value << " (W " << (curMove.winRate * 100)
                   << ", D " << (curMove.drawRate * 100) << ", S " << curMove.utilityStdev
-                  << ") | V " << nodesText(curMove.numVisits) << " | SD " << curMove.selDepth
+                  << ") | V " << nodesText(curMove.edgeVisits) << " | SD " << curMove.selDepth
                   << " | " << curMove.pv << std::endl;
     }
 
-    std::cout << "Speed " << speedText(visits * 1000 / std::max(elapsed, (Time)1)) << " | Visit "
-              << nodesText(visits) << " | Time " << timeText(elapsed) << std::endl;
+    std::cout << "Speed " << speedText(newVisits * 1000 / std::max(elapsed, (Time)1)) << " | Visit "
+              << nodesText(newVisits) << " | Playout " << nodesText(playouts) << " | Time "
+              << timeText(elapsed) << std::endl;
 }
 
 }  // namespace Printing
@@ -324,7 +331,7 @@ void evaluateNode(Node &node, const State &state)
 /// @param th The search thread that is searching this node.
 /// @param state The game state of this node. The state's hash must be equal to the node's.
 /// @param ply The current search ply. Root node is zero.
-/// @param visits The number of new visits for this playout.
+/// @param visits The number of desired new visits for this playout.
 /// @return The number of actual new visits added to this node.
 template <NodeType NT>
 uint32_t searchNode(Node &node, SearchThread &th, int ply, uint32_t newVisits)
@@ -335,6 +342,10 @@ uint32_t searchNode(Node &node, SearchThread &th, int ply, uint32_t newVisits)
     // Discard visits in this node if it is unevaluated
     uint32_t parentVisits = node.getVisits();
     if (parentVisits == 0)
+        return 0;
+
+    // Check if the search is being terminated
+    if (th.sss.terminate.load(std::memory_order_relaxed))
         return 0;
 
     // Cap new visits so that we dont do too much at one time
@@ -775,7 +786,16 @@ void SharedSearchState::updateRootMovesData(MainSearchThread &th)
         selectBestmoveOfChildNode(*rootNode, edgeIndices, selectionValues, lcbValues, true);
 
     for (RootMove &rm : th.rootMoves) {
+        rm.value          = EVAL_NONE;
+        rm.selDepth       = 0;
+        rm.winRate        = std::numeric_limits<float>::quiet_NaN();
+        rm.drawRate       = std::numeric_limits<float>::quiet_NaN();
+        rm.utility        = std::numeric_limits<float>::quiet_NaN();
+        rm.utilityStdev   = std::numeric_limits<float>::quiet_NaN();
+        rm.policyPrior    = std::numeric_limits<float>::quiet_NaN();
+        rm.lcbValue       = std::numeric_limits<float>::quiet_NaN();
         rm.selectionValue = std::numeric_limits<float>::lowest();
+        rm.edgeVisits     = 0;
         rm.clearPV();
     }
 
@@ -802,6 +822,7 @@ void SharedSearchState::updateRootMovesData(MainSearchThread &th)
 
                 rm->winRate  = childUtility * 0.5f + 0.5f;
                 rm->drawRate = childNode->getD();
+                rm->utility  = childUtility;
                 if (Eval lo = childBound.childLowerBound(); lo >= EVAL_MATE_IN_MAX_PLY)
                     rm->value = MateIn(std::max(MateStep(lo, 0) - th.state->moveCount(), 0));
                 else if (Eval up = childBound.childUpperBound(); up <= EVAL_MATED_IN_MAX_PLY)
@@ -811,15 +832,12 @@ void SharedSearchState::updateRootMovesData(MainSearchThread &th)
                 rm->utilityStdev = std::sqrt(childNode->getQVar());
                 numSelectableRootMoves++;
             }
-            rm->numVisits = childEdge.getVisits();
+            rm->edgeVisits = childEdge.getVisits();
             extractPVOfChildNode(*childNode, rm->pv);
         }
-        else {
-            rm->numVisits = 0;
-        }
         rm->policyPrior = childEdge.getP();
-        rm->lcbValue =
-            i < lcbValues.size() ? lcbValues[i] : std::numeric_limits<float>::quiet_NaN();
+        if (i < lcbValues.size())
+            rm->lcbValue = lcbValues[i];
         rm->selectionValue = selectionValues[i];
     }
 
@@ -839,21 +857,23 @@ void SharedSearchState::updateRootMovesData(MainSearchThread &th)
 void SearchThread::clear(bool newGame)
 {
     rootMoves.clear();
-    numVisits   = 0;
-    numPlayouts = 0;
-    selDepth    = 0;
+    numNewVisits = 0;
+    numPlayouts  = 0;
+    selDepth     = 0;
 }
 
 void MainSearchThread::clear(bool newGame)
 {
     SearchThread::clear(newGame);
     bestMove  = std::pair {Move::None, Move::None};
-    startTime = optimalTime = maximalTime = 0;
+    startTime = optimumTime = maximumTime = 0;
+    lastOutputNewVisits                   = 0;
     lastOutputPlayouts                    = 0;
     lastOutputTime                        = 0;
 
-    sharedSearchState->terminate = false;
-    sharedSearchState->rootNode  = nullptr;
+    sharedSearchState->terminate           = false;
+    sharedSearchState->accumulatedPlayouts = 0;
+    sharedSearchState->rootNode            = nullptr;
     if (!newGame)
         return;
 
@@ -886,9 +906,8 @@ void MainSearchThread::clear(bool newGame)
 void MainSearchThread::search()
 {
     // Init time management
-    lastOutputTime = startTime = Now();
-    std::tie(optimalTime, maximalTime) =
-        TimeControl::getOptimalAndMaximalTime(sharedSearchState->options);
+    lastOutputTime = startTime         = Now();
+    std::tie(optimumTime, maximumTime) = TimeControl::getOptimalAndMaximalTime(*this);
 
     // Starts worker threads, then starts main thread
     sss.setupRootNode(*state);  // Setup root node and other stuffs
@@ -908,17 +927,40 @@ void SearchThread::search()
     // Main search loop
     std::vector<Node *> selectedPath;
     while (!sss.terminate.load(std::memory_order_relaxed)) {
-        uint32_t newNumPlayouts = MaxNumVisitsPerPlayout;
+        // Strictly stop extra playouts if the accumulated playouts have reached the maximum
+        if (sss.options.maxPlayouts > 0) {
+            // Acquire a new playout without exceeding the maximum playout limit
+            uint64_t currentPlayouts    = sss.accumulatedPlayouts.load(std::memory_order_relaxed);
+            bool     acquiredNewPlayout = false;
+            while (true) {
+                if (currentPlayouts >= sss.options.maxPlayouts)
+                    break;
 
-        // Cap new number of playouts to the maximum num nodes to visit
-        if (sss.options.maxPlayouts) {
-            uint64_t playoutsSearched = sss.pool.playoutsSearched();
-            if (playoutsSearched >= sss.options.maxPlayouts)
+                if (sss.accumulatedPlayouts.compare_exchange_weak(currentPlayouts,
+                                                                  currentPlayouts + 1,
+                                                                  std::memory_order_relaxed,
+                                                                  std::memory_order_relaxed)) {
+                    acquiredNewPlayout = true;
+                    break;
+                }
+            }
+
+            if (!acquiredNewPlayout)
+                break;  // We failed to acquire a new playout, so we stop the search
+        }
+
+        // Determine the number of new visits to make in this playout
+        uint32_t desiredNumNewVisits = NumNewVisitsPerPlayout;
+        if (sss.options.maxNewVisits) {
+            uint64_t newVisitsSearched = sss.pool.newVisitsSearched();
+            // Stop the search if we have reached the maximum number of new visits
+            if (newVisitsSearched >= sss.options.maxNewVisits)
                 break;
 
-            uint64_t maxPlayoutsToCap = sss.options.maxPlayouts - playoutsSearched;
-            if (maxPlayoutsToCap < newNumPlayouts)
-                newNumPlayouts = maxPlayoutsToCap;
+            // Cap new number of new visits from search options
+            uint64_t maxNewVisitsToCap = sss.options.maxNewVisits - newVisitsSearched;
+            if (maxNewVisitsToCap < desiredNumNewVisits)
+                desiredNumNewVisits = maxNewVisitsToCap;
         }
 
         // Clear the seldepth for this search thread
@@ -928,19 +970,30 @@ void SearchThread::search()
         bool isFirstMove = (state->nonPassMoveCount() == 0) || (state->nonPassMoveCount() % 2 == 1);
         auto searchFn    = isFirstMove ? searchNode<NodeType::NT_ROOT_FIRST>
                                        : searchNode<NodeType::NT_NONROOT_SECOND>;
-        uint32_t newNumNodes = searchFn(*sss.rootNode, *this, 0, newNumPlayouts);
-        numPlayouts.fetch_add(newNumNodes, std::memory_order_relaxed);
+        uint32_t newVisits = searchFn(*sss.rootNode, *this, 0, desiredNumNewVisits);
+
+        // Accumulate the new visits and playouts
+        numNewVisits.fetch_add(newVisits, std::memory_order_relaxed);
+        numPlayouts.fetch_add(1, std::memory_order_relaxed);
 
         if (isMainThread()) {
             MainSearchThread &mainTh = static_cast<MainSearchThread &>(*this);
+            // Check if we should terminate the search
             mainTh.checkStopInSearch();
 
-            // Check if we should print root moves by an amount of playouts or elapsed time
+            // Check if we should print outputs by an amount of newVisits/playouts/time
             bool shouldPrintRootMoves = false;
+            if (NewVisitsToPrintMCTSRootmoves > 0) {
+                uint64_t currNumNewVisits = sss.pool.newVisitsSearched();
+                uint64_t elapsedNewVisits = currNumNewVisits - mainTh.lastOutputNewVisits;
+                if (elapsedNewVisits >= NewVisitsToPrintMCTSRootmoves) {
+                    mainTh.lastOutputNewVisits = currNumNewVisits;
+                    shouldPrintRootMoves       = true;
+                }
+            }
             if (PlayoutsToPrintMCTSRootmoves > 0) {
                 uint64_t currNumPlayouts = sss.pool.playoutsSearched();
                 uint64_t elapsedPlayouts = currNumPlayouts - mainTh.lastOutputPlayouts;
-
                 if (elapsedPlayouts >= PlayoutsToPrintMCTSRootmoves) {
                     mainTh.lastOutputPlayouts = currNumPlayouts;
                     shouldPrintRootMoves      = true;
@@ -960,11 +1013,6 @@ void SearchThread::search()
                 sss.updateRootMovesData(mainTh);
                 Printing::printRootMoves(mainTh, sss.numSelectableRootMoves);
             }
-
-            // If we have only one root move and enough playouts searched, terminate the search
-            if (rootMoves.size() == 1
-                && sss.pool.playoutsSearched() >= NumPlayoutsAfterSingularRoot)
-                sss.terminate.store(true, std::memory_order_relaxed);
         }
     }
 }

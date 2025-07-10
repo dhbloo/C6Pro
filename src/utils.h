@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <new>
 #include <ostream>
 #include <string>
 
@@ -35,6 +36,10 @@
     #define LIKELY(x)   (x)
     #define UNLIKELY(x) (x)
 #endif
+
+// Define a macro to align data to cache line size
+// This is useful for avoiding false sharing in multi-threaded applications.
+#define ALIGN_CACHELINE alignas(std::hardware_destructive_interference_size)
 
 // --------------------------------------------------------
 // Common bit operations

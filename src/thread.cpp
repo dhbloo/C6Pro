@@ -11,7 +11,7 @@ SearchThread::SearchThread(SharedSearchState &sss, uint32_t threadId)
     , state {nullptr}
     , evaluator {nullptr}
     , rootMoves {}
-    , numVisits {0}
+    , numNewVisits {0}
     , numPlayouts {0}
     , selDepth {0}
     , id_ {threadId}
@@ -92,11 +92,13 @@ void MainSearchThread::checkStopInSearch()
 {
     auto &opts = sss.options;
 
-    // Check if we have reached node/time limits
-    if (opts.maxVisits && sss.pool.visitsSearched() >= opts.maxVisits
-        || opts.useTimeLimit && Now() - startTime >= maximalTime) {
+    // If we have reached newVisits/playouts/time limits, terminate the search
+    bool reachedNewVisitsLimit =
+        opts.maxNewVisits && sss.pool.newVisitsSearched() >= opts.maxNewVisits;
+    bool reachedPlayoutsLimit = opts.maxPlayouts && sss.pool.playoutsSearched() >= opts.maxPlayouts;
+    bool reachedTimeLimit     = opts.useTimeLimit && (Now() - startTime >= optimumTime);
+    if (reachedNewVisitsLimit || reachedPlayoutsLimit || reachedTimeLimit)
         sss.terminate.store(true, std::memory_order_relaxed);
-    }
 }
 
 void MainSearchThread::runCustomTaskAndWait(std::function<void(SearchThread &)> task,
