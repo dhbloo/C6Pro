@@ -131,7 +131,7 @@ static_assert(std::atomic<EvalBound>::is_always_lock_free,
 
 /// Node represents a node in the MCTS graph.
 /// It holds the edges, result and various statistics of this node.
-class Node
+class alignas(64) Node
 {
 public:
     /// Constructs a new unevaluated node with no children edges.
@@ -148,13 +148,15 @@ public:
     Node &operator=(Node &&rhs)      = delete;
 
     /// Set this node to be a terminal node and set num visits to 1.
+    /// @param utility The raw terminal utility value of this node.
     /// @param eval The terminal eval of this node.
-    void setTerminal(Eval eval);
+    void setTerminal(float utility, Eval eval);
 
     /// Set this node to be a non-terminal node and set num visits to 1.
-    /// @param utility The raw utility value of this node.
+    /// @param utility The raw terminal utility value of this node.
+    /// @param winLossRate The raw win-loss rate of this node.
     /// @param drawRate The raw draw probability of this node.
-    void setNonTerminal(float utility, float drawRate);
+    void setNonTerminal(float utility, float winLossRate, float drawRate);
 
     /// Initializes the edges of this node from the given move picker.
     /// @param moves The moves to create edges for this node.
@@ -179,6 +181,9 @@ public:
     /// Returns the estimated sample variance of utility value.
     float getQVar(float priorVar = 1.0f, float priorWeight = 1.0f) const;
 
+    /// Returns the average win-loss rate of this node.
+    float getWL() const { return wl_.load(std::memory_order_relaxed); }
+
     /// Returns the average draw rate of this node.
     float getD() const { return d_.load(std::memory_order_relaxed); }
 
@@ -191,10 +196,13 @@ public:
     /// Returns the reference to the age of this node.
     std::atomic<uint32_t> &getAgeRef() { return age_; }
 
-    /// Returns the evaluated utility value of this node.
+    /// Returns the evaluated raw utility value of this node.
     float getEvalUtility() const { return utility_; }
 
-    /// Returns the evaluated draw rate of this node.
+    /// Returns the evaluated raw win-loss rate of this node.
+    float getEvalWinLossRate() const { return winLossRate_; }
+
+    /// Returns the evaluated raw draw rate of this node.
     float getEvalDrawRate() const { return drawRate_; }
 
     /// Returns the propogated value bound of this node.
@@ -242,11 +250,14 @@ private:
     /// mainly for computing virtual loss when multi-threading is used.
     std::atomic<uint32_t> nVirtual_;
 
-    /// Average utility (from current side to move) of this node, in [-1,1].
+    /// Average utility (from current side to move) of this node.
     std::atomic<float> q_;
 
     /// Average squared utility of this node, for computing utility variance.
     std::atomic<float> qSqr_;
+
+    /// Average win-loss rate (from current side to move) of this node in [-1,1].
+    std::atomic<float> wl_;
 
     /// Average draw rate of this node in [0,1]. Not flipped when changing side.
     std::atomic<float> d_;
@@ -257,9 +268,13 @@ private:
     /// The propogated terminal value bound of this node.
     std::atomic<EvalBound> bound_;
 
-    /// For non-terminal node, this stores the node's raw utility value in [-1,1].
+    /// This stores the node's static evaluated raw utility value.
     /// Higher values means better position from current side to move.
     float utility_;
+
+    /// This stores the node's static evaluated raw win-loss rate in [-1,1].
+    /// (from current side to move).
+    float winLossRate_;
 
     /// For non-terminal node, this stores the node's raw draw probability in [0,1].
     /// (from current side to move).
@@ -273,3 +288,7 @@ private:
     /// The current side to move.
     Player side_;
 };
+
+// Check the size and alignment of a node should be 64bytes.
+static_assert(sizeof(Node) == 64, "Node size should be 64 bytes");
+static_assert(alignof(Node) == 64, "Node alignment should be 64 bytes");

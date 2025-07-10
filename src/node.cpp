@@ -3,13 +3,15 @@
 #include "eval.h"
 #include "nodetable.h"
 
+// Default as a losing node for the parent's side of view
 Node::Node(uint64_t hash, uint32_t age, Player currentSide)
     : hash_(hash)
     , edges_(nullptr)
     , n_(0)
     , nVirtual_(0)
-    , q_(1.0f)  // Default as a losing node for the parent's side of view
+    , q_(1.0f)
     , qSqr_(1.0f)
+    , wl_(1.0f)
     , d_(0.0f)
     , age_(age)
     , bound_()
@@ -26,34 +28,38 @@ Node::~Node()
         delete edgeArray;
 }
 
-void Node::setTerminal(Eval eval)
+void Node::setTerminal(float utility, Eval eval)
 {
     assert(eval != EVAL_NONE);
     assert(-EVAL_INFINITE <= eval && eval <= EVAL_INFINITE);
+    utility_      = utility;
     terminalEval_ = eval;
 
     Value v(eval);
-    utility_  = v.winLossRate();
-    drawRate_ = v.drawRate();
+    winLossRate_ = v.winLossRate();
+    drawRate_    = v.drawRate();
 
     q_.store(utility_, std::memory_order_relaxed);
     qSqr_.store(utility_ * utility_, std::memory_order_relaxed);
+    wl_.store(winLossRate_, std::memory_order_relaxed);
     d_.store(drawRate_, std::memory_order_relaxed);
     bound_.store(EvalBound {eval}, std::memory_order_relaxed);
     n_.store(1, std::memory_order_release);
 }
 
-void Node::setNonTerminal(float utility, float drawRate)
+void Node::setNonTerminal(float utility, float winLossRate, float drawRate)
 {
-    assert(utility >= -1.0f && utility <= 1.0f);
+    assert(winLossRate >= -1.0f && winLossRate <= 1.0f);
     assert(drawRate >= 0.0f && drawRate <= 1.0f);
 
     this->utility_      = utility;
+    this->winLossRate_  = winLossRate;
     this->drawRate_     = drawRate;
     this->terminalEval_ = EVAL_NONE;
 
     q_.store(utility_, std::memory_order_relaxed);
     qSqr_.store(utility_ * utility_, std::memory_order_relaxed);
+    wl_.store(winLossRate_, std::memory_order_relaxed);
     d_.store(drawRate_, std::memory_order_relaxed);
     n_.store(1, std::memory_order_release);
 }
@@ -105,6 +111,7 @@ void Node::updateStats()
     uint32_t  nSum     = 1;
     float     qSum     = utility_;
     float     qSqrSum  = utility_ * utility_;
+    float     wlSum    = winLossRate_;
     float     dSum     = drawRate_;
     EvalBound maxBound = EvalBound {-EVAL_INFINITE};
     for (uint32_t i = 0; i < edgeArray->numEdges; i++) {
@@ -123,11 +130,13 @@ void Node::updateStats()
 
         float childQ    = childNode->q_.load(std::memory_order_relaxed);
         float childQSqr = childNode->qSqr_.load(std::memory_order_relaxed);
+        float childWL   = childNode->wl_.load(std::memory_order_relaxed);
         float childD    = childNode->d_.load(std::memory_order_relaxed);
         bool  flipSign  = (side_ != childNode->side_);  // Flip sign if side changes for this child
         nSum += childN;
         qSum += childN * (flipSign ? -childQ : childQ);
         qSqrSum += childN * childQSqr;
+        wlSum += childN * (flipSign ? -childWL : childWL);
         dSum += childN * childD;
         maxBound |= childNode->bound_.load(std::memory_order_relaxed);
     }
@@ -135,6 +144,7 @@ void Node::updateStats()
     float norm = 1.0f / nSum;
     q_.store(qSum * norm, std::memory_order_relaxed);
     qSqr_.store(qSqrSum * norm, std::memory_order_relaxed);
+    wl_.store(wlSum * norm, std::memory_order_relaxed);
     d_.store(dSum * norm, std::memory_order_relaxed);
 
     // Only update bound if this is not a terminal node

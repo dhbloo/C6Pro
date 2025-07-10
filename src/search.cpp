@@ -84,6 +84,14 @@ constexpr NodeType nextNodeType(NodeType nt)
     return NodeType::NT_ROOT_FIRST;  // Default case, should not happen
 }
 
+/// Compute the utility value from the win-loss rate and draw rate.
+float utilityValue(float winLossRate, float drawRate, Player currentSide)
+{
+    float utility = winLossRate * WinLossUtilityScale;
+    utility += drawRate * DrawUtilityScale[currentSide];
+    return utility;
+}
+
 /// Compute the Cpuct exploration factor for the given parent node visits.
 float cpuctExplorationFactor(uint32_t parentVisits)
 {
@@ -291,7 +299,8 @@ void evaluateNode(Node &node, const State &state)
 {
     // Check if the state has been filled (no legal moves).
     if (state.legalMoveCount() == 0) {
-        node.setTerminal(EVAL_DRAW);
+        float drawUtility = utilityValue(0.0f, 1.0f, state.currentSide());
+        node.setTerminal(drawUtility, EVAL_DRAW);
         return;
     }
 
@@ -299,8 +308,11 @@ void evaluateNode(Node &node, const State &state)
     // TODO: Search VCF
 
     // Evaluate value for new node that has not been visited
-    Value value = state.evaluator()->evaluateValue(state.currentSide());
-    node.setNonTerminal(value.winLossRate(), value.drawRate());
+    Value value       = state.evaluator()->evaluateValue(state.currentSide());
+    float winLossRate = value.winLossRate();
+    float drawRate    = value.drawRate();
+    float utility     = utilityValue(winLossRate, drawRate, state.currentSide());
+    node.setNonTerminal(utility, winLossRate, drawRate);
 
     // If ExpandWhenFirstEvaluate mode is enabled, we expand the node immediately
     if (ExpandWhenFirstEvaluate)

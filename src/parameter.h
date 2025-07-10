@@ -1,6 +1,11 @@
 #pragma once
 
+#include "game.h"
+
 #include <cstdint>
+
+constexpr float WinLossUtilityScale       = 1.0f;
+constexpr float DrawUtilityScale[SIDE_NB] = {0.0f, 0.0f};
 
 constexpr bool  UseUniformPolicy        = false;
 constexpr bool  UsePassMove             = false;
