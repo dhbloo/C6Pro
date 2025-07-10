@@ -2,6 +2,7 @@
 
 #include <doctest/doctest.h>
 #include <iostream>
+#include <unordered_set>
 
 TEST_CASE("Game State 19x19")
 {
@@ -290,7 +291,47 @@ TEST_CASE("Game State 19x19")
         std::cout << state << std::endl;
     }
 
-    SUBCASE("History and recent moves") {}
+    SUBCASE("History and recent moves") {
+        state.move(Move {5, 5});
+        state.move(Move {6, 5});
+        state.move(Move {6, 6});
+        state.move(Move {5, 6});
+        state.move(Move {5, 7});
+        state.move(Move {6, 7});
+        state.move(Move {6, 8});
+        state.move(Move {6, 4});
+        state.move(Move {6, 9});
+        CHECK_EQ(int(state.getHistoryMove(0)), int(Move {5, 5}));
+        CHECK_EQ(int(state.getHistoryMove(4)), int(Move {5, 7}));
+        CHECK_EQ(int(state.getHistoryMove(7)), int(Move {6, 4}));
+        CHECK_EQ(int(state.getRecentMove(0)), int(Move {6, 9}));
+        CHECK_EQ(int(state.getRecentMove(4)), int(Move {5, 7}));
+        CHECK_EQ(int(state.getRecentMove(7)), int(Move {6, 5}));
+    }
 
-    SUBCASE("Legal moves") {}
+    SUBCASE("Legal moves") {
+        state.move(Move {5, 5});
+        state.move(Move {6, 5});
+        state.move(Move {6, 6});
+        state.move(Move {5, 6});
+        state.move(Move {5, 7});
+        state.move(Move {6, 7});
+        state.move(Move {6, 8});
+        state.move(Move {6, 4});
+        state.move(Move {6, 9});
+        std::unordered_set<int16_t> cache;
+        auto move_list = state.getLegalMoves(false);
+        for (auto move : move_list) {
+            cache.emplace(int(move));
+        }
+        CHECK_EQ(cache.size(), 361-9);
+        cache.clear();
+        move_list = state.getLegalMoves(true);
+        for (auto move : move_list) {
+            cache.emplace(int(move));
+        }
+        CHECK_EQ(cache.size(), 362-9);
+        CHECK_EQ(state.isLegal(Move{6, 9}), false);
+        CHECK_EQ(state.isLegal(Move{0, 0}), true);
+    }
 }
