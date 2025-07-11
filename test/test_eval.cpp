@@ -32,7 +32,59 @@ TEST_CASE("Value")
     }
 }
 
-TEST_CASE("PolicyBuffer") {}
+TEST_CASE("PolicyBuffer") {
+    PolicyBuffer policy_buffer{19};
+
+    SUBCASE("Initial PolicyBuffer") {
+        bool is_all_empty = true;
+        for (int i=0; i < 19; i++) {
+            for (int j=0; j < 19; j++) {
+                if (policy_buffer.getComputeFlag(Move{i, j})) {
+                    is_all_empty = false;
+                }
+            }
+        }
+        CHECK_EQ(is_all_empty, true);
+    }
+
+    SUBCASE("Add score to PolicyBuffer") {
+        // set (10, 10), (9, 10), (12, 11)
+        policy_buffer(Move{10, 10}) = 3.0;
+        policy_buffer.setComputeFlag(Move{10, 10});
+        policy_buffer(Move{9, 10}) = 2.0;
+        policy_buffer.setComputeFlag(Move{9, 10});
+        policy_buffer(Move{12, 11}) = 1.0;
+        policy_buffer.setComputeFlag(Move{12, 11});
+        CHECK_EQ(policy_buffer(Move{10, 10}), 3.0);
+        CHECK_EQ(policy_buffer.getComputeFlag(Move{10, 10}), true);
+        CHECK_EQ(policy_buffer(Move(9, 10)), 2.0);
+        CHECK_EQ(policy_buffer.getComputeFlag(Move{9, 10}), true);
+        CHECK_EQ(policy_buffer(Move(12, 11)), 1.0);
+        CHECK_EQ(policy_buffer.getComputeFlag(Move{12, 11}), true);
+    }
+
+    SUBCASE("Allpy Softmax") {
+        policy_buffer(Move{10, 10}) = 3.0;
+        policy_buffer.setComputeFlag(Move{10, 10});
+        policy_buffer(Move{9, 10}) = 2.0;
+        policy_buffer.setComputeFlag(Move{9, 10});
+        policy_buffer(Move{12, 11}) = 1.0;
+        policy_buffer.setComputeFlag(Move{12, 11});
+        policy_buffer.applySoftmax();
+        float sum = 0.0f;
+        for (int i=0; i < 19; i++) {
+            for (int j=0; j < 19; j++) {
+                if (policy_buffer.getComputeFlag(Move{i, j})) {
+                    sum += policy_buffer(Move{i, j});
+                }
+            }
+        }
+        std::cout << policy_buffer(Move{10, 10}) << std::endl;
+        std::cout << policy_buffer(Move{9, 10}) << std::endl;
+        std::cout << policy_buffer(Move{12, 11}) << std::endl;
+        CHECK_EQ(sum, 1.0f);
+    }
+}
 
 TEST_CASE("Dummy Evaluator")
 {
