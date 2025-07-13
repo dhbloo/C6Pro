@@ -83,7 +83,7 @@ class MainSearchThread : public SearchThread
 public:
     MainSearchThread(std::unique_ptr<SharedSearchState> sss)
         : SearchThread(*sss, 0)
-        , sharedSearchState(std::move(sss))
+        , sharedSearchState_(std::move(sss))
     {}
 
     /// Clear the main thread state between two search.
@@ -97,19 +97,26 @@ public:
     /// @param task The custom task to run in each thread.
     /// @param includeSelf If true, the main thread will also run the task.
     void runCustomTaskAndWait(std::function<void(SearchThread &)> task, bool includeSelf);
+    /// Print the search output to the output stream.
+    /// @param os The output stream to print the search output.
+    /// @param noThrottle If true, the output will be always printed without throttling.
+    void printSearchOutput(std::ostream &os, bool noThrottle = false);
+    /// Setup the time control parameters for this search.
+    void setupTimeControl();
 
+private:
     /// The shared search state that is used by all threads.
-    std::unique_ptr<SharedSearchState> sharedSearchState;
+    std::unique_ptr<SharedSearchState> sharedSearchState_;
     /// The best root move result.
-    std::pair<Move, Move> bestMove;
+    std::pair<Move, Move> bestMove_;
     /// The start time point.
-    Time startTime;
+    Time startTime_;
     /// The optimal and maximal elapsed time allowed for this turn.
-    Time optimumTime, maximumTime;
+    Time optimumTime_, maximumTime_;
     // The last number of newVisits and playouts that we printed search outputs.
-    uint64_t lastOutputNewVisits, lastOutputPlayouts;
+    uint64_t lastOutputNewVisits_, lastOutputPlayouts_;
     // The last time that we printed search outputs.
-    Time lastOutputTime;
+    Time lastOutputTime_;
 
     friend class ThreadPool;  // Allow ThreadPool to access private members
 };
@@ -135,11 +142,11 @@ public:
     void stopThinking();
     /// Start multi-threaded thinking for the given position.
     /// @param state The game state to start searching.
-    /// @param options Options of this search.
+    /// @param limits Options of this search.
     /// @param onStop Function to be called (in main thread) when search is finished or interrupted.
     /// @note This is a non-blocking function. It returns immediately after starting all threads.
     void startThinking(const State          &state,
-                       const SearchOptions  &options,
+                       const SearchLimits   &limits,
                        std::function<void()> onStop = nullptr);
     /// Get the main search thread, which is the first thread in the pool.
     MainSearchThread *main() const { return static_cast<MainSearchThread *>(front().get()); }

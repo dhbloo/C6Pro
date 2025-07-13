@@ -3,6 +3,7 @@
 #include "game.h"
 #include "node.h"
 #include "nodetable.h"
+#include "searchparam.h"
 #include "utils.h"
 
 #include <atomic>
@@ -14,10 +15,8 @@
 class ThreadPool;        // forward declaration
 class MainSearchThread;  // forward declaration
 
-/// SearchOptions contains the search settings that can be configured by the user.
-/// These options include the resource limits, search mode, and various other variables
-/// that can be used to control the behavior of the search algorithm.
-struct SearchOptions
+/// SearchLimits contains the resource limits that can be configured by the user.
+struct SearchLimits
 {
     /// Enable time control to terminate the search
     bool useTimeLimit = false;
@@ -90,8 +89,10 @@ struct SharedSearchState
 {
     /// The reference to the thread pool that holds these threads.
     ThreadPool &pool;
-    /// The search options that controls the search.
-    SearchOptions options;
+    /// The search limits that controls the search.
+    SearchLimits limits;
+    /// The search parameters that are used in the search.
+    SearchParams searchParams;
     /// The flag to indicate if the search should be terminated.
     ALIGN_CACHELINE std::atomic_bool terminate;
     /// The number of accmulated playouts searched by all threads.
@@ -102,15 +103,14 @@ struct SharedSearchState
     std::unique_ptr<NodeTable> nodeTable;
     /// The global node age to synchronize the node table.
     uint32_t globalNodeAge;
-    /// The number of selectable root moves, set by updateRootMovesData().
-    uint32_t numSelectableRootMoves;
     /// The searched position of last root node represented by a list of moves.
     std::vector<Move> previousPosition;
 
     /// Initialize the root node from the root state.
-    void setupRootNode(State &state);
+    void setupRootNode(MainSearchThread &th);
     /// Garbage collect all old nodes in the node table.
     void recycleOldNodes();
     /// Rank the root moves and update PV, then print all root moves
-    void updateRootMovesData(MainSearchThread &th);
+    /// @return The number of valid selectable root moves.
+    uint32_t updateRootMovesData(MainSearchThread &th);
 };

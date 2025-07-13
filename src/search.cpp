@@ -1,71 +1,12 @@
 #include "search.h"
 
 #include "eval.h"
-#include "parameter.h"
 #include "thread.h"
 
 #include <iomanip>
 #include <iostream>
 #include <mutex>
-
-namespace TimeControl {
-
-std::pair<Time, Time> getOptimalAndMaximalTime(const MainSearchThread &th)
-{
-    auto &options = th.sharedSearchState->options;
-
-    Time matchTimeLeft = options.timeLeft;
-    if (options.maxMatchTime == 0)  // unlimited match time
-        matchTimeLeft = std::numeric_limits<Time>::max();
-
-    Time maximumTime = Time(matchTimeLeft / MatchSpaceMin);
-    maximumTime      = std::min(options.maxTurnTime, maximumTime);
-    maximumTime      = std::max(maximumTime - TurnTimeReservedMilliseconds, (Time)0);
-
-    float timeCapRatio =
-        (th.rootMoves.size() == 1) ? SingularRootTimeCapRatio : LastPlayoutTimeCapRatio;
-    Time optimumTime = Time(maximumTime * timeCapRatio);
-
-    return {optimumTime, maximumTime};
-}
-
-}  // namespace TimeControl
-
-namespace Printing {
-
-std::ostream &operator<<(std::ostream &out, const std::vector<Move> &pv)
-{
-    for (size_t i = 0; i < pv.size(); i++) {
-        if (i)
-            out << ' ';
-        out << pv[i];
-    }
-    return out;
-};
-
-void printRootMoves(MainSearchThread &th, size_t numRootMovesToDisplay)
-{
-    FormatGuard fg(std::cout);
-    Time        elapsed   = Now() - th.startTime;
-    uint64_t    newVisits = th.sss.pool.newVisitsSearched();
-    uint64_t    playouts  = th.sss.pool.playoutsSearched();
-
-    for (size_t pvIdx = 0; pvIdx < std::min(numRootMovesToDisplay, th.rootMoves.size()); pvIdx++) {
-        RootMove &curMove = th.rootMoves[pvIdx];
-
-        std::cout << std::fixed << std::setprecision(2);
-        std::cout << "(" << pvIdx + 1 << ") " << curMove.value << " (W " << (curMove.winRate * 100)
-                  << ", D " << (curMove.drawRate * 100) << ", S " << curMove.utilityStdev
-                  << ") | V " << nodesText(curMove.edgeVisits) << " | SD " << curMove.selDepth
-                  << " | " << curMove.pv << std::endl;
-    }
-
-    std::cout << "Speed " << speedText(newVisits * 1000 / std::max(elapsed, (Time)1)) << " | Visit "
-              << nodesText(newVisits) << " | Playout " << nodesText(playouts) << " | Time "
-              << timeText(elapsed) << std::endl;
-}
-
-}  // namespace Printing
+#include <sstream>
 
 namespace {
 
@@ -92,48 +33,52 @@ constexpr NodeType nextNodeType(NodeType nt)
 }
 
 /// Compute the utility value from the win-loss rate and draw rate.
-float utilityValue(float winLossRate, float drawRate, Player currentSide)
+float utilityValue(const SearchParams &p, float winLossRate, float drawRate, Player currentSide)
 {
-    float utility = winLossRate * WinLossUtilityScale;
-    utility += drawRate * DrawUtilityScale[currentSide];
+    float utility = winLossRate * p.WinLossUtilityScale;
+    utility += drawRate * p.DrawUtilityScale[currentSide];
     return utility;
 }
 
 /// Compute the Cpuct exploration factor for the given parent node visits.
-float cpuctExplorationFactor(uint32_t parentVisits)
+float cpuctExplorationFactor(const SearchParams &p, uint32_t parentVisits)
 {
-    float cpuct = CpuctExploration;
-    if (CpuctExplorationLog != 0)
-        cpuct += CpuctExplorationLog * std::log(1.0f + parentVisits / CpuctExplorationBase);
+    float cpuct = p.CpuctExploration;
+    if (p.CpuctExplorationLog != 0)
+        cpuct += p.CpuctExplorationLog * std::log(1.0f + parentVisits / p.CpuctExplorationBase);
     return cpuct * std::sqrt(parentVisits + 1e-2f);
 }
 
 /// Compute the initial utility value for unexplored children, considering first play urgency.
-float fpuValue(float parentAvgUtility, float parentRawUtility, float exploredPolicySum)
+float fpuValue(const SearchParams &p,
+               float               parentAvgUtility,
+               float               parentRawUtility,
+               float               exploredPolicySum)
 {
-    float blendWeight      = std::min(1.0f, std::pow(exploredPolicySum, FpuUtilityBlendPow));
+    float blendWeight      = std::min(1.0f, std::pow(exploredPolicySum, p.FpuUtilityBlendPow));
     float parentUtilityFPU = blendWeight * parentAvgUtility + (1 - blendWeight) * parentRawUtility;
-    float fpu              = parentUtilityFPU - FpuReductionMax * std::sqrt(exploredPolicySum);
-    fpu -= (1 + fpu) * FpuLossProp;
+    float fpu              = parentUtilityFPU - p.FpuReductionMax * std::sqrt(exploredPolicySum);
+    fpu -= (1 + fpu) * p.FpuLossProp;
     return fpu;
 }
 
 /// Compute PUCT selection value with the given child statistics.
-float puctSelectionValue(float    childUtility,
-                         float    childDraw,
-                         float    parentDraw,
-                         float    childPolicy,
-                         uint32_t childVisits,
-                         uint32_t childVirtualVisits,
-                         float    cpuctExploration)
+float puctSelectionValue(const SearchParams &p,
+                         float               childUtility,
+                         float               childDraw,
+                         float               parentDraw,
+                         float               childPolicy,
+                         uint32_t            childVisits,
+                         uint32_t            childVirtualVisits,
+                         float               cpuctExploration)
 {
     float U = cpuctExploration * childPolicy / (1 + childVisits);
     float Q = childUtility;
 
     // Reduce utility value for drawish child nodes for PUCT selection
     // Encourage exploration for less drawish child nodes
-    if (DrawUtilityPenalty != 0)
-        Q -= DrawUtilityPenalty * childDraw * (1 - parentDraw);
+    if (p.DrawUtilityPenalty != 0)
+        Q -= p.DrawUtilityPenalty * childDraw * (1 - parentDraw);
 
     // Account for virtual losses
     if (childVirtualVisits > 0)
@@ -168,19 +113,22 @@ allocateOrFindNode(NodeTable &nodeTable, uint64_t hash, uint32_t globalNodeAge, 
 /// @return A pair of (the non-null best child edge pointer, the child node pointer)
 ///   The child node pointer is nullptr if the edge is unexplored (has zero visit).
 template <NodeType NT>
-std::pair<Edge *, Node *> selectChild(Node &node, SearchThread &th)
+std::pair<Edge *, Node *> selectChild(Node &node, const SearchThread &th)
 {
+    const SearchParams &params = th.sss.searchParams;
     assert(!node.isLeaf());
+
     uint32_t parentVisits     = node.getVisits();
     float    parentDraw       = node.getD();
-    float    cpuctExploration = cpuctExplorationFactor(parentVisits);
+    float    cpuctExploration = cpuctExplorationFactor(params, parentVisits);
 
     // Apply dynamic cpuct scaling based on parent utility variance if needed
-    if (CpuctUtilityStdevScale > 0) {
-        float parentUtilityVar = node.getQVar(CpuctUtilityVarPrior, CpuctUtilityVarPriorWeight);
-        float parentUtilityStdevProp = std::sqrt(parentUtilityVar / CpuctUtilityVarPrior);
+    if (params.CpuctUtilityStdevScale > 0) {
+        float parentUtilityVar =
+            node.getQVar(params.CpuctUtilityVarPrior, params.CpuctUtilityVarPriorWeight);
+        float parentUtilityStdevProp = std::sqrt(parentUtilityVar / params.CpuctUtilityVarPrior);
         float parentUtilityStdevFactor =
-            1.0f + CpuctUtilityStdevScale * (parentUtilityStdevProp - 1.0f);
+            1.0f + params.CpuctUtilityStdevScale * (parentUtilityStdevProp - 1.0f);
         cpuctExploration *= parentUtilityStdevFactor;
     }
 
@@ -204,9 +152,8 @@ std::pair<Edge *, Node *> selectChild(Node &node, SearchThread &th)
                 continue;
         }
 
-        // Get the child node of this edge
+        // If child nodes are not expanded, then the following edges must be unexpanded as well
         Node *childNode = childEdge.child();
-        // If this edge is not expanded, then the following edges must be unexpanded as well
         if (!childNode)
             break;
 
@@ -219,7 +166,8 @@ std::pair<Edge *, Node *> selectChild(Node &node, SearchThread &th)
         uint32_t childVirtualVisits = childNode->getVirtualVisits();
         float    childUtility       = -childNode->getQ();
         float    childDraw          = childNode->getD();
-        float    selectionValue     = puctSelectionValue(childUtility,
+        float    selectionValue     = puctSelectionValue(params,
+                                                  childUtility,
                                                   childDraw,
                                                   parentDraw,
                                                   childPolicy,
@@ -236,13 +184,14 @@ std::pair<Edge *, Node *> selectChild(Node &node, SearchThread &th)
     // Compute selection value of the first unexplored child (which will have the highest
     // policy among the rest unexplored children)
     if (edgeIndex < edges.numEdges) {
-        float fpuUtility = fpuValue(node.getQ(), node.getEvalUtility(), exploredPolicySum);
+        float fpuUtility = fpuValue(params, node.getQ(), node.getEvalUtility(), exploredPolicySum);
 
         Edge    &childEdge          = edges[edgeIndex];
         float    childPolicy        = childEdge.getP();
         uint32_t childVisits        = 0;  // Unexplored edge must has zero edge visit
         uint32_t childVirtualVisits = 0;  // Unexplored edge must has zero virtual visit
-        float    selectionValue     = puctSelectionValue(fpuUtility,
+        float    selectionValue     = puctSelectionValue(params,
+                                                  fpuUtility,
                                                   parentDraw,
                                                   parentDraw,
                                                   childPolicy,
@@ -262,15 +211,18 @@ std::pair<Edge *, Node *> selectChild(Node &node, SearchThread &th)
 
 /// expand: generate edges and evaluate the policy of this node
 /// @return Whether this node has no valid move, which means this node is a terminal node.
-bool expandNode(Node &node, const State &state)
+bool expandNode(Node &node, const SearchThread &th)
 {
-    std::vector<Move>  legalMoves = state.getLegalMoves(UsePassMove);
+    State              &state  = *th.state;
+    const SearchParams &params = th.sss.searchParams;
+
+    std::vector<Move>  legalMoves = state.getLegalMoves(params.UsePassMove);
     std::vector<float> policyValues;
 
     if (legalMoves.empty())
         return true;  // No legal moves, this node is terminal
 
-    if (UseUniformPolicy) {
+    if (params.UseUniformPolicy) {
         // If we use uniform policy, we just fill the policy values with same value
         float policyValue = 1.0f / legalMoves.size();
         policyValues.resize(legalMoves.size(), policyValue);
@@ -284,7 +236,7 @@ bool expandNode(Node &node, const State &state)
 
         // Fill the pass move with the default logits (usually a large negative value),
         // so that it will get a very low probability after softmax.
-        policyBuf(Move::Pass) = DefaultPassPolicyLogits;
+        policyBuf(Move::Pass) = params.DefaultPassPolicyLogits;
 
         // Evaluate the policy for the current side to move
         state.evaluator()->evaluatePolicy(state.currentSide(), policyBuf);
@@ -302,11 +254,14 @@ bool expandNode(Node &node, const State &state)
 }
 
 /// evaluate: evaluate the value of this node and make the first visit
-void evaluateNode(Node &node, const State &state)
+void evaluateNode(Node &node, const SearchThread &th)
 {
+    State              &state  = *th.state;
+    const SearchParams &params = th.sss.searchParams;
+
     // Check if the state has been filled (no legal moves).
     if (state.legalMoveCount() == 0) {
-        float drawUtility = utilityValue(0.0f, 1.0f, state.currentSide());
+        float drawUtility = utilityValue(params, 0.0f, 1.0f, state.currentSide());
         node.setTerminal(drawUtility, EVAL_DRAW);
         return;
     }
@@ -318,12 +273,12 @@ void evaluateNode(Node &node, const State &state)
     Value value       = state.evaluator()->evaluateValue(state.currentSide());
     float winLossRate = value.winLossRate();
     float drawRate    = value.drawRate();
-    float utility     = utilityValue(winLossRate, drawRate, state.currentSide());
+    float utility     = utilityValue(params, winLossRate, drawRate, state.currentSide());
     node.setNonTerminal(utility, winLossRate, drawRate);
 
     // If ExpandWhenFirstEvaluate mode is enabled, we expand the node immediately
-    if (ExpandWhenFirstEvaluate)
-        expandNode(node, state);
+    if (params.ExpandWhenFirstEvaluate)
+        expandNode(node, th);
 }
 
 /// select and backpropagate: select the best child node and backpropagate the statistics
@@ -336,7 +291,8 @@ void evaluateNode(Node &node, const State &state)
 template <NodeType NT>
 uint32_t searchNode(Node &node, SearchThread &th, int ply, uint32_t newVisits)
 {
-    State &state = *th.state;
+    State              &state  = *th.state;
+    const SearchParams &params = th.sss.searchParams;
     assert(node.getHash() == state.hash());
 
     // Discard visits in this node if it is unevaluated
@@ -349,7 +305,7 @@ uint32_t searchNode(Node &node, SearchThread &th, int ply, uint32_t newVisits)
         return 0;
 
     // Cap new visits so that we dont do too much at one time
-    newVisits = std::min(newVisits, uint32_t(parentVisits * MaxNewVisitsProp) + 1);
+    newVisits = std::min(newVisits, uint32_t(parentVisits * params.MaxNewVisitsProp) + 1);
 
     // Return directly if this node is a terminal node and not at root
     if (node.isTerminal()) {
@@ -359,7 +315,7 @@ uint32_t searchNode(Node &node, SearchThread &th, int ply, uint32_t newVisits)
 
     // Make sure the parent node is expanded before we select a child
     if (node.isLeaf()) {
-        bool noValidMove = expandNode(node, state);
+        bool noValidMove = expandNode(node, th);
 
         // If we found that there is no valid move, we mark this node as terminal
         // node the finish this visit.
@@ -395,7 +351,7 @@ uint32_t searchNode(Node &node, SearchThread &th, int ply, uint32_t newVisits)
         if (allocatedNode) {
             // Mark that we are now starting to visit this node
             node.beginVisit(1);
-            evaluateNode(*childNode, state);
+            evaluateNode(*childNode, th);
             if (ply + 1 > th.selDepth)
                 th.selDepth = ply + 1;
 
@@ -414,7 +370,7 @@ uint32_t searchNode(Node &node, SearchThread &th, int ply, uint32_t newVisits)
             uint32_t childEdgeVisits = childEdge->getVisits();
             uint32_t childNodeVisits = childNode->getVisits();
             if (childEdgeVisits >= childNodeVisits
-                || childNodeVisits < MinTranspositionSkipVisits) {
+                || childNodeVisits < params.MinTranspositionSkipVisits) {
                 node.beginVisit(newVisits);
                 uint32_t actualChildNewVisits =
                     searchNode<nextNodeType(NT)>(*childNode, th, ply + 1, newVisits);
@@ -472,11 +428,13 @@ uint32_t searchNode(Node &node, SearchThread &th, int ply, uint32_t newVisits)
 /// @return The index of the best move (with highest selection value) to select.
 ///     Returns -1 if there is no selectable children.
 int selectBestmoveOfChildNode(const Node            &node,
+                              const SearchThread    &th,
                               std::vector<uint32_t> &edgeIndices,
                               std::vector<float>    &selectionValues,
                               std::vector<float>    &lcbValues,
                               bool                   allowDirectPolicyMove)
 {
+    const SearchParams &params = th.sss.searchParams;
     assert(!node.isLeaf());
     edgeIndices.clear();
     selectionValues.clear();
@@ -519,7 +477,7 @@ int selectBestmoveOfChildNode(const Node            &node,
     }
 
     // Compute lower confidence bound values if needed
-    if (UseLCBForBestmoveSelection && !edgeIndices.empty()) {
+    if (params.UseLCBForBestmoveSelection && !edgeIndices.empty()) {
         int   bestLCBIndex = -1;
         float bestLCBValue = std::numeric_limits<float>::lowest();
 
@@ -542,12 +500,12 @@ int selectBestmoveOfChildNode(const Node            &node,
             }
             else {
                 float utilityVar = childNode->getQVar();
-                float radius     = LCBStdevs * std::sqrt(utilityVar / childVisits);
+                float radius     = params.LCBStdevs * std::sqrt(utilityVar / childVisits);
                 lcbValues.push_back(utilityMean - radius);
                 lcbRadius.push_back(radius);
 
                 if (selectionValues[i] > 0
-                    && selectionValues[i] >= LCBMinVisitProp * bestmoveSelectionValue
+                    && selectionValues[i] >= params.LCBMinVisitProp * bestmoveSelectionValue
                     && lcbValues[i] > bestLCBValue) {
                     bestLCBIndex = i;
                     bestLCBValue = lcbValues[i];
@@ -625,7 +583,10 @@ int selectBestmoveOfChildNode(const Node            &node,
 /// @param node The node to extract PV.
 /// @param pv[out] The extracted PV will be appended to this array.
 /// @param maxDepth Only extract PV within this depth.
-void extractPVOfChildNode(const Node &node, std::vector<Move> &pv, int maxDepth = 100)
+void extractPVOfChildNode(const Node         &node,
+                          const SearchThread &th,
+                          std::vector<Move>  &pv,
+                          int                 maxDepth = 100)
 {
     const Node           *curNode = &node;
     std::vector<uint32_t> tempEdgeIndices;
@@ -635,6 +596,7 @@ void extractPVOfChildNode(const Node &node, std::vector<Move> &pv, int maxDepth 
             break;
 
         int bestmoveIndex = selectBestmoveOfChildNode(*curNode,
+                                                      th,
                                                       tempEdgeIndices,
                                                       tempSelectionValues,
                                                       tempLCBValues,
@@ -697,8 +659,10 @@ void recursiveApply(Node &node, std::function<void(Node &)> *f, PRNG *prng, uint
 
 }  // namespace
 
-void SharedSearchState::setupRootNode(State &state)
+void SharedSearchState::setupRootNode(MainSearchThread &th)
 {
+    State &state = *th.state;
+
     // Get the current root position
     std::vector<Move> rootPosition;
     for (int moveIndex = 0; moveIndex < state.moveCount(); moveIndex++) {
@@ -714,9 +678,9 @@ void SharedSearchState::setupRootNode(State &state)
     std::tie(rootNode, std::ignore) =
         allocateOrFindNode(*nodeTable, state.hash(), globalNodeAge, state.currentSide());
     if (rootNode->getVisits() == 0)
-        evaluateNode(*rootNode, state);
+        evaluateNode(*rootNode, th);
     if (rootNode->isLeaf())
-        expandNode(*rootNode, state);
+        expandNode(*rootNode, th);
     assert(rootNode->edges()->numEdges > 0);
 
     // Garbage collect old nodes (only when we go forward, and not with singular root)
@@ -775,15 +739,16 @@ void SharedSearchState::recycleOldNodes()
               << ", Root visit: " << rootNode->getVisits() << std::endl;
 }
 
-void SharedSearchState::updateRootMovesData(MainSearchThread &th)
+uint32_t SharedSearchState::updateRootMovesData(MainSearchThread &th)
 {
+    const SearchParams &params = th.sss.searchParams;
     assert(rootNode != nullptr);
     assert(!rootNode->isLeaf());
 
     std::vector<uint32_t> edgeIndices;
     std::vector<float>    selectionValues, lcbValues;
     int                   bestChildIndex =
-        selectBestmoveOfChildNode(*rootNode, edgeIndices, selectionValues, lcbValues, true);
+        selectBestmoveOfChildNode(*rootNode, th, edgeIndices, selectionValues, lcbValues, true);
 
     for (RootMove &rm : th.rootMoves) {
         rm.value          = EVAL_NONE;
@@ -799,8 +764,8 @@ void SharedSearchState::updateRootMovesData(MainSearchThread &th)
         rm.clearPV();
     }
 
-    EdgeArray &edges       = *rootNode->edges();
-    numSelectableRootMoves = 0;
+    EdgeArray &edges                  = *rootNode->edges();
+    uint32_t   numSelectableRootMoves = 0;
     for (size_t i = 0; i < edgeIndices.size(); i++) {
         uint32_t edgeIndex = edgeIndices[i];
         Edge    &childEdge = edges[edgeIndex];
@@ -833,7 +798,7 @@ void SharedSearchState::updateRootMovesData(MainSearchThread &th)
                 numSelectableRootMoves++;
             }
             rm->edgeVisits = childEdge.getVisits();
-            extractPVOfChildNode(*childNode, rm->pv);
+            extractPVOfChildNode(*childNode, th, rm->pv);
         }
         rm->policyPrior = childEdge.getP();
         if (i < lcbValues.size())
@@ -844,7 +809,7 @@ void SharedSearchState::updateRootMovesData(MainSearchThread &th)
     // If we do not have any visited children, display all of them to show policy
     if (numSelectableRootMoves == 0)
         numSelectableRootMoves = th.rootMoves.size();
-    numSelectableRootMoves = std::min(numSelectableRootMoves, MaxNonPVRootmovesToPrint);
+    numSelectableRootMoves = std::min(numSelectableRootMoves, params.MaxNumRootmovesToPrint);
 
     // Sort the root moves in descending order by selection value
     std::stable_sort(th.rootMoves.begin(),
@@ -852,6 +817,8 @@ void SharedSearchState::updateRootMovesData(MainSearchThread &th)
                      [](const RootMove &m1, const RootMove &m2) {
                          return m1.selectionValue > m2.selectionValue;
                      });
+
+    return numSelectableRootMoves;
 }
 
 void SearchThread::clear(bool newGame)
@@ -865,22 +832,21 @@ void SearchThread::clear(bool newGame)
 void MainSearchThread::clear(bool newGame)
 {
     SearchThread::clear(newGame);
-    bestMove  = std::pair {Move::None, Move::None};
-    startTime = optimumTime = maximumTime = 0;
-    lastOutputNewVisits                   = 0;
-    lastOutputPlayouts                    = 0;
-    lastOutputTime                        = 0;
+    bestMove_  = std::pair {Move::None, Move::None};
+    startTime_ = optimumTime_ = maximumTime_ = 0;
+    lastOutputNewVisits_                     = 0;
+    lastOutputPlayouts_                      = 0;
+    lastOutputTime_                          = 0;
 
-    sharedSearchState->terminate           = false;
-    sharedSearchState->accumulatedPlayouts = 0;
-    sharedSearchState->rootNode            = nullptr;
+    sss.terminate           = false;
+    sss.accumulatedPlayouts = 0;
+    sss.rootNode            = nullptr;
     if (!newGame)
         return;
 
     // Clear the node table using all threads, and wait for finish
-    sharedSearchState->previousPosition.clear();
-    sharedSearchState->globalNodeAge          = 0;
-    sharedSearchState->numSelectableRootMoves = 0;
+    sss.previousPosition.clear();
+    sss.globalNodeAge = 0;
     std::atomic<size_t> numShardsProcessed {0};
     runCustomTaskAndWait(
         [&numShardsProcessed](SearchThread &th) {
@@ -895,32 +861,31 @@ void MainSearchThread::clear(bool newGame)
             }
         },
         true);
-    sharedSearchState->pool.waitForIdle();
+    sss.pool.waitForIdle();
 
     // Reset node table num shards if needed
-    if (!sharedSearchState->nodeTable
-        || sharedSearchState->nodeTable->getNumShards() != NumNodeTableShardsPowerOfTwo)
-        sharedSearchState->nodeTable = std::make_unique<NodeTable>(NumNodeTableShardsPowerOfTwo);
+    const SearchParams &params = sss.searchParams;
+    if (!sss.nodeTable || sss.nodeTable->getNumShards() != params.NumNodeTableShardsPowerOfTwo)
+        sss.nodeTable = std::make_unique<NodeTable>(params.NumNodeTableShardsPowerOfTwo);
 }
 
 void MainSearchThread::search()
 {
     // Init time management
-    lastOutputTime = startTime         = Now();
-    std::tie(optimumTime, maximumTime) = TimeControl::getOptimalAndMaximalTime(*this);
+    setupTimeControl();
 
     // Starts worker threads, then starts main thread
-    sss.setupRootNode(*state);  // Setup root node and other stuffs
+    sss.setupRootNode(*this);  // Setup root node and other stuffs
     runCustomTaskAndWait([](SearchThread &th) { th.SearchThread::search(); }, true);
 
     // Rank root moves and record best move
-    sss.updateRootMovesData(*this);
-    Printing::printRootMoves(*this, sss.numSelectableRootMoves);
-    bestMove = rootMoves[0].movePair;
+    printSearchOutput(std::cout, true);
+    bestMove_ = rootMoves[0].movePair;
 }
 
 void SearchThread::search()
 {
+    const SearchParams &params = sss.searchParams;
     assert(state->evaluator());
     assert(sss.rootNode != nullptr && !sss.rootNode->isLeaf());
 
@@ -928,12 +893,12 @@ void SearchThread::search()
     std::vector<Node *> selectedPath;
     while (!sss.terminate.load(std::memory_order_relaxed)) {
         // Strictly stop extra playouts if the accumulated playouts have reached the maximum
-        if (sss.options.maxPlayouts > 0) {
+        if (sss.limits.maxPlayouts > 0) {
             // Acquire a new playout without exceeding the maximum playout limit
             uint64_t currentPlayouts    = sss.accumulatedPlayouts.load(std::memory_order_relaxed);
             bool     acquiredNewPlayout = false;
             while (true) {
-                if (currentPlayouts >= sss.options.maxPlayouts)
+                if (currentPlayouts >= sss.limits.maxPlayouts)
                     break;
 
                 if (sss.accumulatedPlayouts.compare_exchange_weak(currentPlayouts,
@@ -950,15 +915,15 @@ void SearchThread::search()
         }
 
         // Determine the number of new visits to make in this playout
-        uint32_t desiredNumNewVisits = NumNewVisitsPerPlayout;
-        if (sss.options.maxNewVisits) {
+        uint32_t desiredNumNewVisits = params.NumNewVisitsPerPlayout;
+        if (sss.limits.maxNewVisits) {
             uint64_t newVisitsSearched = sss.pool.newVisitsSearched();
             // Stop the search if we have reached the maximum number of new visits
-            if (newVisitsSearched >= sss.options.maxNewVisits)
+            if (newVisitsSearched >= sss.limits.maxNewVisits)
                 break;
 
-            // Cap new number of new visits from search options
-            uint64_t maxNewVisitsToCap = sss.options.maxNewVisits - newVisitsSearched;
+            // Cap new number of new visits from search limits
+            uint64_t maxNewVisitsToCap = sss.limits.maxNewVisits - newVisitsSearched;
             if (maxNewVisitsToCap < desiredNumNewVisits)
                 desiredNumNewVisits = maxNewVisitsToCap;
         }
@@ -980,44 +945,101 @@ void SearchThread::search()
             MainSearchThread &mainTh = static_cast<MainSearchThread &>(*this);
             // Check if we should terminate the search
             mainTh.checkStopInSearch();
-
-            // Check if we should print outputs by an amount of newVisits/playouts/time
-            bool shouldPrintRootMoves = false;
-            if (NewVisitsToPrintMCTSRootmoves > 0) {
-                uint64_t currNumNewVisits = sss.pool.newVisitsSearched();
-                uint64_t elapsedNewVisits = currNumNewVisits - mainTh.lastOutputNewVisits;
-                if (elapsedNewVisits >= NewVisitsToPrintMCTSRootmoves) {
-                    mainTh.lastOutputNewVisits = currNumNewVisits;
-                    shouldPrintRootMoves       = true;
-                }
-            }
-            if (PlayoutsToPrintMCTSRootmoves > 0) {
-                uint64_t currNumPlayouts = sss.pool.playoutsSearched();
-                uint64_t elapsedPlayouts = currNumPlayouts - mainTh.lastOutputPlayouts;
-                if (elapsedPlayouts >= PlayoutsToPrintMCTSRootmoves) {
-                    mainTh.lastOutputPlayouts = currNumPlayouts;
-                    shouldPrintRootMoves      = true;
-                }
-            }
-            if (MillisecondsToPrintMCTSRootmoves > 0) {
-                Time currentTime = Now();
-                Time elapsedTime = currentTime - mainTh.lastOutputTime;
-                if (elapsedTime >= MillisecondsToPrintMCTSRootmoves) {
-                    mainTh.lastOutputTime = currentTime;
-                    shouldPrintRootMoves  = true;
-                }
-            }
-
-            // If we should print root moves, update the data and print them
-            if (shouldPrintRootMoves) {
-                sss.updateRootMovesData(mainTh);
-                Printing::printRootMoves(mainTh, sss.numSelectableRootMoves);
-            }
+            // Print the search output with throttling
+            mainTh.printSearchOutput(std::cout, false);
         }
     }
 }
 
-void SearchOptions::setTimeControl(int64_t turnTime, int64_t matchTime)
+void MainSearchThread::printSearchOutput(std::ostream &os, bool noThrottle)
+{
+    const SearchParams &params = sss.searchParams;
+
+    // Check if we should print outputs by an amount of newVisits/playouts/time
+    bool shouldPrintRootMoves = noThrottle;
+    if (params.NewVisitsToPrintMCTSRootmoves > 0) {
+        uint64_t currNumNewVisits = sss.pool.newVisitsSearched();
+        uint64_t elapsedNewVisits = currNumNewVisits - lastOutputNewVisits_;
+        if (elapsedNewVisits >= params.NewVisitsToPrintMCTSRootmoves) {
+            lastOutputNewVisits_ = currNumNewVisits;
+            shouldPrintRootMoves = true;
+        }
+    }
+    if (params.PlayoutsToPrintMCTSRootmoves > 0) {
+        uint64_t currNumPlayouts = sss.pool.playoutsSearched();
+        uint64_t elapsedPlayouts = currNumPlayouts - lastOutputPlayouts_;
+        if (elapsedPlayouts >= params.PlayoutsToPrintMCTSRootmoves) {
+            lastOutputPlayouts_  = currNumPlayouts;
+            shouldPrintRootMoves = true;
+        }
+    }
+    if (params.MillisecondsToPrintMCTSRootmoves > 0) {
+        Time currentTime = Now();
+        Time elapsedTime = currentTime - lastOutputTime_;
+        if (elapsedTime >= params.MillisecondsToPrintMCTSRootmoves) {
+            lastOutputTime_      = currentTime;
+            shouldPrintRootMoves = true;
+        }
+    }
+
+    if (!shouldPrintRootMoves)
+        return;
+
+    // If we should print root moves, update the data and print them
+    size_t numSelectableRootMoves = sss.updateRootMovesData(*this);
+
+    FormatGuard fg(std::cout);
+    Time        elapsed   = Now() - startTime_;
+    uint64_t    newVisits = sss.pool.newVisitsSearched();
+    uint64_t    playouts  = sss.pool.playoutsSearched();
+    auto        pvText    = [](const std::vector<Move> &pv) -> std::string {
+        std::stringstream out;
+        for (size_t i = 0; i < pv.size(); i++) {
+            if (i)
+                out << ' ';
+            out << pv[i];
+        }
+        return out.str();
+    };
+
+    std::cout << std::fixed << std::setprecision(2);
+    for (size_t pvIdx = 0; pvIdx < std::min(numSelectableRootMoves, rootMoves.size()); pvIdx++) {
+        RootMove &curMove = rootMoves[pvIdx];
+
+        std::cout << "(" << pvIdx + 1 << ") " << curMove.value << " (W " << (curMove.winRate * 100)
+                  << ", D " << (curMove.drawRate * 100) << ", S " << curMove.utilityStdev
+                  << ") | V " << nodesText(curMove.edgeVisits) << " | SD " << curMove.selDepth
+                  << " | " << pvText(curMove.pv) << std::endl;
+    }
+
+    std::cout << "Speed " << speedText(newVisits * 1000 / std::max(elapsed, (Time)1)) << " | Visit "
+              << nodesText(newVisits) << " | Playout " << nodesText(playouts) << " | Time "
+              << timeText(elapsed) << std::endl;
+}
+
+void MainSearchThread::setupTimeControl()
+{
+    lastOutputTime_ = startTime_ = Now();
+
+    const SearchLimits &limits = sss.limits;
+    const SearchParams &params = sss.searchParams;
+
+    Time matchTimeLeft = limits.timeLeft;
+    if (limits.maxMatchTime == 0)  // unlimited match time
+        matchTimeLeft = std::numeric_limits<Time>::max();
+
+    maximumTime_ =
+        Time(matchTimeLeft
+             / std::clamp(state->legalMoveCount(), params.MatchSpaceMin, params.MatchSpace));
+    maximumTime_ = std::min(limits.maxTurnTime, maximumTime_);
+    maximumTime_ = std::max(maximumTime_ - params.TurnTimeReservedMilliseconds, (Time)0);
+
+    float timeCapRatio =
+        (rootMoves.size() == 1) ? params.SingularRootTimeCapRatio : params.LastPlayoutTimeCapRatio;
+    optimumTime_ = Time(maximumTime_ * timeCapRatio);
+}
+
+void SearchLimits::setTimeControl(int64_t turnTime, int64_t matchTime)
 {
     if (turnTime <= 0 && matchTime <= 0) {  // Infinite time
         this->maxTurnTime  = 0;

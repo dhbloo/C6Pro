@@ -90,13 +90,12 @@ void SearchThread::threadLoop()
 
 void MainSearchThread::checkStopInSearch()
 {
-    auto &opts = sss.options;
-
     // If we have reached newVisits/playouts/time limits, terminate the search
     bool reachedNewVisitsLimit =
-        opts.maxNewVisits && sss.pool.newVisitsSearched() >= opts.maxNewVisits;
-    bool reachedPlayoutsLimit = opts.maxPlayouts && sss.pool.playoutsSearched() >= opts.maxPlayouts;
-    bool reachedTimeLimit     = opts.useTimeLimit && (Now() - startTime >= optimumTime);
+        sss.limits.maxNewVisits && sss.pool.newVisitsSearched() >= sss.limits.maxNewVisits;
+    bool reachedPlayoutsLimit =
+        sss.limits.maxPlayouts && sss.pool.playoutsSearched() >= sss.limits.maxPlayouts;
+    bool reachedTimeLimit = sss.limits.useTimeLimit && (Now() - startTime_ >= optimumTime_);
     if (reachedNewVisitsLimit || reachedPlayoutsLimit || reachedTimeLimit)
         sss.terminate.store(true, std::memory_order_relaxed);
 }
@@ -108,15 +107,15 @@ void MainSearchThread::runCustomTaskAndWait(std::function<void(SearchThread &)> 
         return;
 
     // Run task in non-main threads
-    for (size_t i = 1; i < sharedSearchState->pool.size(); i++)
-        sharedSearchState->pool[i]->runTask(task);
+    for (size_t i = 1; i < sss.pool.size(); i++)
+        sss.pool[i]->runTask(task);
 
     // Run task in main thread
     if (includeSelf)
         task(*this);
 
     // Wait for all other threads to finish
-    sharedSearchState->pool.waitForIdle();
+    sss.pool.waitForIdle();
 }
 
 void ThreadPool::waitForIdle()
@@ -157,11 +156,11 @@ void ThreadPool::clear(bool newGame)
 void ThreadPool::stopThinking()
 {
     if (size() > 0)
-        main()->sharedSearchState->terminate.store(true, std::memory_order_relaxed);
+        main()->sss.terminate.store(true, std::memory_order_relaxed);
 }
 
 void ThreadPool::startThinking(const State          &state,
-                               const SearchOptions  &options,
+                               const SearchLimits   &limits,
                                std::function<void()> onStop)
 {
     assert(size() > 0);
@@ -169,9 +168,9 @@ void ThreadPool::startThinking(const State          &state,
     // If we are already thinking, wait for it first
     waitForIdle();
 
-    // Clean up main thread state and copy options and game state
+    // Clean up main thread state and copy limits and game state
     main()->clear(false);
-    main()->sharedSearchState->options = options;
+    main()->sss.limits = limits;
     main()->setStateAndEvaluator(state);
 
     // TODO: Generate root moves for main search thread
