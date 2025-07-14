@@ -6,7 +6,7 @@
 
 #include <cassert>
 
-SearchThread::SearchThread(SharedSearchState &sss, uint32_t threadId)
+SearchThread::SearchThread(SharedSearchState &sss, uint32_t threadId, bool bindGroup)
     : sss {sss}
     , state {nullptr}
     , evaluator {nullptr}
@@ -15,11 +15,25 @@ SearchThread::SearchThread(SharedSearchState &sss, uint32_t threadId)
     , numPlayouts {0}
     , selDepth {0}
     , id_ {threadId}
+    , numaNodeId_ {Numa::DefaultNumaNodeId}
     , running_ {false}
     , exit_ {false}
 {
     // Launch the thread loop in a new thread.
     thread_ = std::thread(&SearchThread::threadLoop, this);
+
+    runTask([bindGroup](SearchThread &th) {
+        // Set thread affinity to a specific group if needed
+        if (bindGroup) {
+            // If OS already scheduled us on a different group than 0 then don't overwrite
+            // the choice, eventually we are one of many one-threaded processes running on
+            // some Windows NUMA hardware, for instance in fishtest. To make it simple,
+            // just check if running threads are below a threshold, in this case all this
+            // NUMA machinery is not needed. We also store this thread's numa ID for the
+            // later NUMA-aware loading of evaluator weights.
+            th.numaNodeId_ = Numa::bindThisThread(th.id_);
+        }
+    });
 }
 
 SearchThread::~SearchThread()
@@ -136,13 +150,15 @@ void ThreadPool::setNumThreads(size_t numThreads)
     if (numThreads > 0) {
         auto sharedSearchState    = std::make_unique<SharedSearchState>(*this);
         auto sharedSearchStatePtr = sharedSearchState.get();
+        bool bindGroup            = (numThreads >= Numa::BindGroupThreshold);
 
         // Make sure the first thread created is MainSearchThread
-        push_back(std::make_unique<MainSearchThread>(std::move(sharedSearchState)));
+        push_back(std::make_unique<MainSearchThread>(std::move(sharedSearchState), bindGroup));
 
         // Create the rest of the threads as SearchThread
         while (size() < numThreads) {
-            push_back(std::make_unique<SearchThread>(*sharedSearchStatePtr, (uint32_t)size()));
+            push_back(
+                std::make_unique<SearchThread>(*sharedSearchStatePtr, (uint32_t)size(), bindGroup));
         }
     }
 }

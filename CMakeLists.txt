@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18.2 FATAL_ERROR)
 project(C6Pro)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 #==========================================================
@@ -159,7 +159,9 @@ list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
 add_library(C6ProCore STATIC ${SOURCES} ${HEADERS})
 target_include_directories(C6ProCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_subdirectory(external/simde)
-target_link_libraries(C6ProCore PUBLIC simde)
+add_subdirectory(external/lz4)
+add_subdirectory(external/zip)
+target_link_libraries(C6ProCore PUBLIC simde lz4 zip)
 
 # Main executable
 add_executable(C6Pro src/main.cpp)

@@ -20,7 +20,8 @@ public:
     /// Instantiate a new search thread.
     /// @param sss The shared search state that is used by all threads.
     /// @param threadId The unique ID of this thread.
-    SearchThread(SharedSearchState &sss, uint32_t threadId);
+    /// @param bindGroup If true, bind this thread to a specific NUMA group.
+    SearchThread(SharedSearchState &sss, uint32_t threadId, bool bindGroup);
     /// Destory this search thread. Search must be stopped before entering.
     virtual ~SearchThread();
     /// Launch a custom task in this thread.
@@ -60,6 +61,8 @@ public:
 private:
     /// The unique ID of this thread, starting from 0.
     uint32_t id_;
+    /// The NUMA node ID that this thread is bound to.
+    int numaNodeId_;
     /// Flags to control the thread loop.
     bool running_, exit_;
     /// The current task function to run in this thread.
@@ -81,8 +84,8 @@ private:
 class MainSearchThread : public SearchThread
 {
 public:
-    MainSearchThread(std::unique_ptr<SharedSearchState> sss)
-        : SearchThread(*sss, 0)
+    MainSearchThread(std::unique_ptr<SharedSearchState> sss, bool bindGroup)
+        : SearchThread(*sss, 0, bindGroup)
         , sharedSearchState_(std::move(sss))
     {}
 

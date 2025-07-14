@@ -3,6 +3,7 @@
 #include <compare>
 #include <cstdint>
 #include <ostream>
+#include <vector>
 
 // --------------------------------------------------------
 
@@ -234,6 +235,14 @@ enum Color {
     C_GAP    = 3,
     COLOR_NB = 4,
 };
+
+/// Get the opposite color of the given color.
+/// Black <-> White, Empty <-> Gap
+constexpr Color operator~(const Color c)
+{
+    constexpr Color opponents[4] = {C_WHITE, C_BLACK, C_GAP, C_EMPTY};
+    return opponents[c];
+}
 
 /// Stringify the color to the stream.
 std::ostream &operator<<(std::ostream &out, const Color color);

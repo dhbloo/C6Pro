@@ -3,6 +3,7 @@
 #include "eval.h"
 #include "thread.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <mutex>

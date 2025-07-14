@@ -11,4 +11,4 @@ extern std::string EvaluatorName;
 extern std::string EvaluatorModelPath;
 
 /// The factory function to create a new evaluator instance.
-std::unique_ptr<Evaluator> CreateEvaluator(int boardSize, int threadId);
+std::unique_ptr<Evaluator> CreateEvaluator(int boardSize, int numaNodeId);

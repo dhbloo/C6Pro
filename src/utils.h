@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <memory>
 #include <new>
 #include <ostream>
 #include <string>
@@ -365,7 +366,7 @@ private:
     uint64_t x;
 };
 
-// -------------------------------------------------
+// --------------------------------------------------------
 // Time utility functions
 
 typedef uint64_t Time;
@@ -373,7 +374,7 @@ typedef uint64_t Time;
 /// Get the current time stamp in milliseconds.
 Time Now();
 
-// -------------------------------------------------
+// --------------------------------------------------------
 // Container helpers
 
 template <class T, size_t Size, size_t... Sizes>
@@ -393,14 +394,14 @@ struct MultiDimNativeArray<T, Size>
 template <class T, size_t... Sizes>
 using MDNativeArray = typename MultiDimNativeArray<T, Sizes...>::type;
 
-// -------------------------------------------------
+// --------------------------------------------------------
 // String helper functions
 
 std::string timeText(Time time);
 std::string nodesText(uint64_t nodes);
 std::string speedText(uint64_t nodesPerSecond);
 
-// -------------------------------------------------
+// --------------------------------------------------------
 // Stream helper functions
 
 class FormatGuard
@@ -412,4 +413,123 @@ public:
 private:
     std::ostream &os;
     std::ios      oldState;
+};
+
+// --------------------------------------------------------
+// NUMA-aware helper
+
+namespace Numa {
+
+/// Default NUMA node ID, used when NUMA is not supported or not available.
+constexpr int DefaultNumaNodeId = 0;
+
+/// The threshold for the number of bind groups. If the number of threads is
+/// greater than this threshold, we will bind threads to NUMA groups to
+/// improve performance. This is a heuristic value to determine when to
+/// use NUMA-aware logic.
+constexpr int BindGroupThreshold = 8;
+
+/// Under Windows it is not possible for a process to run on more than one
+/// logical processor group. This usually means to be limited to use max 64
+/// cores. To overcome this, some special platform specific API should be
+/// called to set group affinity for each thread. Original code from Texel by
+/// Peter Österlund. We also let this function return the numa node ID for
+/// the thread, to allow NUMA-aware logics in the thread.
+/// @param idx The index of the thread to bind.
+/// @return The NUMA node ID for the thread.
+int bindThisThread(uint32_t idx);
+
+}  // namespace Numa
+
+// --------------------------------------------------------
+// Memory allocation utility
+
+namespace MemAlloc {
+
+/// A warpper around std::aligned_alloc, which uses system calls if available.
+/// Memory allocated using this function should be freed with alignedFree().
+void *alignedAlloc(size_t alignment, size_t size);
+/// Free memory allocated by alignedAlloc().
+void alignedFree(void *ptr);
+/// A helper to alloc an aligned array of type T. Ptr should be freed with alignedFree().
+template <typename T, size_t Alignment = alignof(T)>
+T *alignedArrayAlloc(size_t arraySize)
+{
+    return static_cast<T *>(alignedAlloc(Alignment, sizeof(T) * arraySize));
+}
+
+/// Allocate large page memory, with min alignment 4KiB. Memory allocated
+/// using this function should be freed with alignedLargePageFree().
+void *alignedLargePageAlloc(size_t size);
+
+/// Free memory allocated by alignedLargePageAlloc().
+void alignedLargePageFree(void *ptr);
+
+/// A custom deleter for unique_ptr large page
+template <typename T>
+struct LargePageDeleter
+{
+    void operator()(T *ptr) const
+    {
+        if (!ptr)
+            return;
+
+        // Explicitly needed to call the destructor
+        if constexpr (!std::is_trivially_destructible_v<T>)
+            ptr->~T();
+
+        alignedLargePageFree(ptr);
+    }
+};
+
+}  // namespace MemAlloc
+
+/// A unique_ptr type for managing large page pointer
+template <typename T>
+using LargePagePtr = std::unique_ptr<T, MemAlloc::LargePageDeleter<T>>;
+
+// Make LargePagePtr by constructing single objects with the given arguments
+template <typename T, typename... Args>
+LargePagePtr<T> make_large_page(Args &&...args)
+{
+    static_assert(alignof(T) <= 4096,
+                  "alignedLargePageAlloc() may fail for such a big alignment requirement of T");
+    void *raw_memory = MemAlloc::alignedLargePageAlloc(sizeof(T));
+    T    *obj        = new (raw_memory) T(std::forward<Args>(args)...);
+    return LargePagePtr<T>(obj);
+}
+
+// --------------------------------------------------------
+// Compression helper
+
+class Compressor
+{
+public:
+    enum class Type { NO_COMPRESS, LZ4_DEFAULT, ZIP_DEFAULT };
+
+    /// Create a compressor with the given algorithm type.
+    Compressor(std::ostream &ostream, Type type);
+    /// Create a decompressor with the given algorithm type.
+    Compressor(std::istream &istream, Type type);
+    ~Compressor();
+
+    /// Open an output stream by entry name.
+    /// Entry name only work for ZIP type. Any type else should leave
+    /// the entry name to empty string.
+    /// @return Pointer to output stream, or nullptr if failed to open.
+    std::ostream *openOutputStream(std::string entryName = "");
+
+    /// Open an input stream by entry name.
+    /// Entry name only work for ZIP type. Any type else should leave
+    /// the entry name to empty string.
+    /// @return Pointer to input stream, or nullptr if failed to open.
+    std::istream *openInputStream(std::string entryName = "");
+
+    /// Close current opened stream in advance. Opened stream will
+    /// also be closed by the time of Compressor's destructor called.
+    void closeStream(std::ios &stream);
+
+private:
+    class CompressorData;
+    CompressorData *data;
 };
