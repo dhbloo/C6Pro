@@ -103,7 +103,7 @@ public:
     /// Print the search output to the output stream.
     /// @param os The output stream to print the search output.
     /// @param noThrottle If true, the output will be always printed without throttling.
-    void printSearchOutput(std::ostream &os, bool noThrottle = false);
+    void printSearchOutput(bool noThrottle = false);
     /// Setup the time control parameters for this search.
     void setupTimeControl();
 

@@ -56,17 +56,6 @@ Value::Value(Eval value) : eval_(value)
     }
 }
 
-std::ostream &operator<<(std::ostream &out, const Value value)
-{
-    out << "Value ("
-        << "W|L|D: " << value.winProb() << "|"
-        << "|" << value.lossProb() << "|" << value.drawRate() << ", "
-        << "winloss: " << value.winLossRate() << ", "
-        << "winrate: " << value.winningRate() << ", "
-        << "eval: " << value.eval() << ")";
-    return out;
-}
-
 PolicyBuffer::PolicyBuffer(int boardSize) : boardSize_(boardSize), computeFlagPass_(false)
 {
     // Initialize the compute flag key to false as default

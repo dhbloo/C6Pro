@@ -3,7 +3,7 @@
 #include "simdops.h"
 #include "weightloader.h"
 
-#include <iostream>
+#include <print>
 
 namespace {
 
@@ -803,7 +803,7 @@ Evaluator::create(int boardSize, int numaNodeId, std::filesystem::path weightPat
             == header.supportedBoardSizes.end())
             return {"incompatible board size " + std::to_string(args.boardSize) + "."};
 
-        std::cout << "mix9svq nnue: load weight from " << args.weightPath.string();
+        std::println("mix9svq nnue: load weight from {}", args.weightPath.string());
         printLoadInfo = true;
 
         return std::nullopt;
@@ -826,7 +826,7 @@ Evaluator::create(int boardSize, int numaNodeId, std::filesystem::path weightPat
     }
 
     if (printLoadInfo)
-        std::cout << "mix9svq nnue: weight loaded in " << timeText(Now() - startTime);
+        std::println("mix9svq nnue: weight loaded in {}", timeText(Now() - startTime));
 
     return Evaluator(boardSize, std::move(weights[P_FIRST]), std::move(weights[P_SECOND]));
 }

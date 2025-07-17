@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <iomanip>
+#include <sstream>
 
 namespace {
 
@@ -42,49 +43,6 @@ const auto initZobrish = []() {
 }();
 
 };  // namespace ZobristHash
-
-// --------------------------------------------------------
-
-std::ostream &operator<<(std::ostream &os, const Player p)
-{
-    switch (p) {
-    case P_FIRST: return os << "First";
-    case P_SECOND: return os << "Second";
-    default: return os << "Unknown";
-    }
-}
-
-std::ostream &operator<<(std::ostream &os, const Eval ev)
-{
-    if (ev == EVAL_NONE)
-        return os << "NONE";
-    else if (ev >= EVAL_MATE_IN_MAX_PLY)
-        return os << "+M" << static_cast<int>(EVAL_MATE - ev);
-    else if (ev <= EVAL_MATED_IN_MAX_PLY)
-        return os << "-M" << static_cast<int>(EVAL_MATE + ev);
-    else
-        return os << static_cast<int>(ev);
-}
-
-std::ostream &operator<<(std::ostream &os, const Move p)
-{
-    if (p.isPass())
-        return os << "Pass";
-    else
-        return os << (p.x() + 'A') << (p.y() + 1);
-}
-
-std::ostream &operator<<(std::ostream &os, const Color color)
-{
-    switch (color) {
-    case C_BLACK: os << 'X'; break;
-    case C_WHITE: os << 'O'; break;
-    case C_EMPTY: os << '.'; break;
-    case C_GAP: os << '*'; break;
-    default: os << ' '; break;
-    }
-    return os;
-}
 
 // --------------------------------------------------------
 
@@ -315,84 +273,94 @@ void State::flipBit(Color c, int x, int y)
     bitKey3_[31 - x + y][c] ^= 1 << x;
 }
 
-std::ostream &operator<<(std::ostream &out, const State &state)
+std::string State::positionString() const
 {
-    FormatGuard fg(out);
-    out << "Hash: " << std::hex << state.hash() << std::dec << '\n';
-    out << "MoveCount: " << state.moveCount() << '\n';
-    out << "NonPassMoveCount: " << state.nonPassMoveCount() << '\n';
-    out << "PassMoveCount: Black=" << state.passMoveCount(P_FIRST)
-        << " White=" << state.passMoveCount(P_SECOND) << '\n';
-    out << "CurrentSide: " << state.currentSide() << " (" << static_cast<Color>(state.currentSide())
-        << ")" << '\n';
-    out << "LastMove: " << state.getRecentMove() << '\n';
-    out << "TerminalEval: " << state.terminalEval() << '\n';
-
-    out << "----------------Board----------------\n";
-    out << std::setfill(' ');
-    for (int y = state.boardSize_ - 1; y >= 0; y--) {
-        out << std::setw(2) << (y + 1) << ' ';
-        for (int x = 0; x < state.boardSize_; x++)
-            out << ' ' << state.getColorAt(x, y);
-        out << '\n';
+    std::string position;
+    for (int i = 0; i < moveCount_; i++) {
+        Move move = history_[i];
+        std::format_to(std::back_inserter(position), "{}", move);
     }
-    out << "   ";
-    for (int x = 0; x < state.boardSize_; x++) {
-        out << ' ' << char('A' + x);
-    }
-    out << '\n';
+    return position;
+}
 
-    if (state.evaluator_) {
-        PolicyBuffer policyBuf(state.boardSize_);
-        for (Move move : state.getLegalMoves(false))
+std::string State::traceString() const
+{
+    std::string result;
+    result.reserve(2048);
+    auto out = std::back_inserter(result);
+
+    std::format_to(out, "Position [{}]\n", positionString());
+    std::format_to(out, "Hash: {:x}\n", hash());
+    std::format_to(out, "MoveCount: {}\n", moveCount());
+    std::format_to(out, "NonPassMoveCount: {}\n", nonPassMoveCount());
+    std::format_to(out,
+                   "PassMoveCount: First={} Second={}\n",
+                   passMoveCount(P_FIRST),
+                   passMoveCount(P_SECOND));
+    std::format_to(out, "CurrentSide: {} ({})\n", currentSide(), static_cast<Color>(currentSide()));
+    std::format_to(out, "LastMove: {}\n", getRecentMove());
+    std::format_to(out, "TerminalEval: {}\n", terminalEval());
+
+    std::format_to(out, "Board:\n");
+    for (int y = boardSize_ - 1; y >= 0; y--) {
+        std::format_to(out, "{:2} ", y + 1);
+        for (int x = 0; x < boardSize_; x++)
+            std::format_to(out, " {}", getColorAt(x, y));
+        std::format_to(out, "\n");
+    }
+    std::format_to(out, "   ");
+    for (int x = 0; x < boardSize_; x++) {
+        std::format_to(out, " {:c}", 'A' + x);
+    }
+    std::format_to(out, "\n");
+
+    if (evaluator_) {
+        PolicyBuffer policyBuf(boardSize_);
+        for (Move move : getLegalMoves(false))
             policyBuf.setComputeFlag(move);
 
-        // Calcualate policy for the current side
-        state.evaluator_->evaluatePolicy(state.currentSide(), policyBuf);
+        // Calculate policy for the current side
+        evaluator_->evaluatePolicy(currentSide(), policyBuf);
 
         // Output the raw policy logits
-        out << "----------Policy-(logits)------------\n";
-        out << std::setfill(' ') << std::setprecision(3);
-        for (int y = state.boardSize_ - 1; y >= 0; y--) {
-            out << std::setw(2) << (y + 1) << ' ';
-            for (int x = 0; x < state.boardSize_; x++)
-                out << std::setw(6) << 100 * policyBuf(Move {x, y});
-            out << '\n';
+        std::format_to(out, "Policy (logits):  Pass={:.0f}\n", 100 * policyBuf(Move::Pass));
+        for (int y = boardSize_ - 1; y >= 0; y--) {
+            std::format_to(out, "{:2} ", y + 1);
+            for (int x = 0; x < boardSize_; x++)
+                std::format_to(out, "{:6.0f}", 100 * policyBuf(Move {x, y}));
+            std::format_to(out, "\n");
         }
-        out << "   ";
-        for (int x = 0; x < state.boardSize_; x++) {
-            out << std::setw(6) << char('A' + x);
+        std::format_to(out, "   ");
+        for (int x = 0; x < boardSize_; x++) {
+            std::format_to(out, "{:>6c}", 'A' + x);
         }
-        out << '\n';
-        out << "Pass: " << std::setw(6) << 100 * policyBuf(Move::Pass) << '\n';
+        std::format_to(out, "\n");
 
         // Output the policy after softmax
         policyBuf.applySoftmax();
-        out << "----------Policy-(softmaxed)---------\n";
-        for (int y = state.boardSize_ - 1; y >= 0; y--) {
-            out << std::setw(2) << (y + 1) << ' ';
-            for (int x = 0; x < state.boardSize_; x++)
-                out << std::setw(6) << 100 * policyBuf(Move {x, y});
-            out << '\n';
+        std::format_to(out, "Policy (softmaxed):  Pass={:.0f}\n", 100 * policyBuf(Move::Pass));
+        for (int y = boardSize_ - 1; y >= 0; y--) {
+            std::format_to(out, "{:2} ", y + 1);
+            for (int x = 0; x < boardSize_; x++)
+                std::format_to(out, "{:6.0f}", 100 * policyBuf(Move {x, y}));
+            std::format_to(out, "\n");
         }
-        out << "   ";
-        for (int x = 0; x < state.boardSize_; x++) {
-            out << std::setw(6) << char('A' + x);
+        std::format_to(out, "   ");
+        for (int x = 0; x < boardSize_; x++) {
+            std::format_to(out, "{:>6c}", 'A' + x);
         }
-        out << '\n';
-        out << "Pass: " << std::setw(6) << 100 * policyBuf(Move::Pass) << '\n';
+        std::format_to(out, "\n");
 
         // Output the value for the current side
-        Value value = state.evaluator_->evaluateValue(state.currentSide());
-        out << "----------------Value----------------\n";
-        out << std::setprecision(4);
-        out << "WinProb: " << value.winProb() << '\n';
-        out << "LossProb: " << value.lossProb() << '\n';
-        out << "DrawProb: " << value.drawRate() << '\n';
-        out << "WinLossRate: " << value.winLossRate() << '\n';
-        out << "WinningRate: " << value.winningRate() << '\n';
-        out << "Eval: " << value.eval() << '\n';
+        Value value = evaluator_->evaluateValue(currentSide());
+        std::format_to(out, "Value:\n");
+        std::format_to(out, "WinProb: {:.4f}\n", value.winProb());
+        std::format_to(out, "LossProb: {:.4f}\n", value.lossProb());
+        std::format_to(out, "DrawProb: {:.4f}\n", value.drawRate());
+        std::format_to(out, "WinLossRate: {:.4f}\n", value.winLossRate());
+        std::format_to(out, "WinningRate: {:.4f}\n", value.winningRate());
+        std::format_to(out, "Eval: {}\n", value.eval());
     }
 
-    return out << std::endl;
+    return result;
 }

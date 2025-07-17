@@ -69,12 +69,11 @@ void Node::createEdges(const std::vector<Move> &moves, const std::vector<float> 
     assert(moves.size() == policyValues.size());
     uint32_t numEdges = static_cast<uint32_t>(moves.size());
 
-    using AllocType      = std::aligned_storage_t<sizeof(EdgeArray), alignof(EdgeArray)>;
-    size_t     numAllocs = (sizeof(EdgeArray) + numEdges * sizeof(Edge)) / sizeof(AllocType);
-    EdgeArray *tempEdges = reinterpret_cast<EdgeArray *>(new AllocType[numAllocs]);
+    size_t     allocSize = sizeof(EdgeArray) + numEdges * sizeof(Edge);
+    void      *rawMem    = operator new(allocSize, std::align_val_t(alignof(EdgeArray)));
+    EdgeArray *tempEdges = new (rawMem) EdgeArray {.numEdges = numEdges};
 
     // Copy the move and policy array to the allocated edge array
-    tempEdges->numEdges = numEdges;
     for (uint32_t i = 0; i < numEdges; i++)
         new (&tempEdges->edges[i]) Edge(moves[i], policyValues[i]);
 
@@ -82,7 +81,7 @@ void Node::createEdges(const std::vector<Move> &moves, const std::vector<float> 
     bool       suc = edges_.compare_exchange_strong(expected, tempEdges, std::memory_order_release);
     // If we are not the one that sets the edge array, then we need to delete the temp edge array
     if (!suc)
-        delete[] tempEdges;
+        operator delete(rawMem, std::align_val_t(alignof(EdgeArray)));
 }
 
 float Node::getQVar(float priorVar, float priorWeight) const

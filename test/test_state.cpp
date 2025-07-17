@@ -1,7 +1,7 @@
 #include "game.h"
 
 #include <doctest/doctest.h>
-#include <iostream>
+#include <print>
 #include <unordered_set>
 
 TEST_CASE("Game State 19x19")
@@ -20,7 +20,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 361);  // 19x19 board
         CHECK_EQ(state.legalMoveCount(true), 362);   // 19x19 board + 1 pass
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
     }
 
     SUBCASE("Make Moves")
@@ -34,7 +34,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 360);  // One less legal move
         CHECK_EQ(state.legalMoveCount(true), 361);   // One less legal move + 1 pass
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
 
         state.move(Move {6, 5});
         CHECK_EQ(state.currentSide(), P_SECOND);
@@ -45,7 +45,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 359);  // Two less legal moves
         CHECK_EQ(state.legalMoveCount(true), 360);   // Two less legal moves + 1 pass
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
 
         state.move(Move {6, 6});
         CHECK_EQ(state.currentSide(), P_FIRST);
@@ -56,7 +56,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 358);  // Three less legal moves
         CHECK_EQ(state.legalMoveCount(true), 359);   // Three less legal moves
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
 
         state.move(Move {5, 6});
         CHECK_EQ(state.currentSide(), P_FIRST);
@@ -67,7 +67,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 357);  // Four less legal moves
         CHECK_EQ(state.legalMoveCount(true), 358);   // Four less legal moves
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
 
         state.move(Move {5, 7});
         CHECK_EQ(state.currentSide(), P_SECOND);
@@ -78,7 +78,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 356);  // Five less legal moves
         CHECK_EQ(state.legalMoveCount(true), 357);   // Five less legal moves
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
 
         state.move(Move {6, 7});
         CHECK_EQ(state.currentSide(), P_SECOND);
@@ -89,7 +89,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 355);  // Six less legal moves
         CHECK_EQ(state.legalMoveCount(true), 356);   // Six less legal moves
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
 
         state.move(Move {6, 8});
         CHECK_EQ(state.currentSide(), P_FIRST);
@@ -100,7 +100,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 354);  // Seven less legal moves
         CHECK_EQ(state.legalMoveCount(true), 355);   // Seven less legal moves
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
 
         state.move(Move {6, 4});
         CHECK_EQ(state.currentSide(), P_FIRST);
@@ -111,7 +111,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 353);  // Eight less legal moves
         CHECK_EQ(state.legalMoveCount(true), 354);   // Eight less legal moves
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
 
         state.move(Move {6, 9});
         CHECK_EQ(state.currentSide(), P_SECOND);
@@ -122,7 +122,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 352);  // Nine less legal moves
         CHECK_EQ(state.legalMoveCount(true), 353);   // Nine less legal moves
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
     }
 
     SUBCASE("Pass Moves")
@@ -196,7 +196,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 351);
         CHECK_EQ(state.legalMoveCount(true), 352);
         CHECK_EQ(state.terminalEval(), EVAL_NONE);
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
     }
 
     SUBCASE("Win Check 1")
@@ -236,7 +236,7 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 349);
         CHECK_EQ(state.legalMoveCount(true), 350);
         CHECK_EQ(state.terminalEval(), MatedIn(0));
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
     }
 
     SUBCASE("Win Check 2")
@@ -288,10 +288,11 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(state.legalMoveCount(false), 349);
         CHECK_EQ(state.legalMoveCount(true), 350);
         CHECK_EQ(state.terminalEval(), MateIn(0));
-        std::cout << state << std::endl;
+        std::println("{:trace}", state);
     }
 
-    SUBCASE("History and recent moves") {
+    SUBCASE("History and recent moves")
+    {
         state.move(Move {5, 5});
         state.move(Move {6, 5});
         state.move(Move {6, 6});
@@ -309,7 +310,8 @@ TEST_CASE("Game State 19x19")
         CHECK_EQ(int(state.getRecentMove(7)), int(Move {6, 5}));
     }
 
-    SUBCASE("Legal moves") {
+    SUBCASE("Legal moves")
+    {
         state.move(Move {5, 5});
         state.move(Move {6, 5});
         state.move(Move {6, 6});
@@ -320,18 +322,18 @@ TEST_CASE("Game State 19x19")
         state.move(Move {6, 4});
         state.move(Move {6, 9});
         std::unordered_set<int16_t> cache;
-        auto move_list = state.getLegalMoves(false);
+        auto                        move_list = state.getLegalMoves(false);
         for (auto move : move_list) {
             cache.emplace(int(move));
         }
-        CHECK_EQ(cache.size(), 361-9);
+        CHECK_EQ(cache.size(), 361 - 9);
         cache.clear();
         move_list = state.getLegalMoves(true);
         for (auto move : move_list) {
             cache.emplace(int(move));
         }
-        CHECK_EQ(cache.size(), 362-9);
-        CHECK_EQ(state.isLegal(Move{6, 9}), false);
-        CHECK_EQ(state.isLegal(Move{0, 0}), true);
+        CHECK_EQ(cache.size(), 362 - 9);
+        CHECK_EQ(state.isLegal(Move {6, 9}), false);
+        CHECK_EQ(state.isLegal(Move {0, 0}), true);
     }
 }

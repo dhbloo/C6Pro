@@ -3,7 +3,7 @@
 #include "game.h"
 
 #include <doctest/doctest.h>
-#include <iostream>
+#include <print>
 
 TEST_CASE("Value")
 {
@@ -16,7 +16,7 @@ TEST_CASE("Value")
         CHECK_EQ(v.lossProb(), 1.0f / 3.0f);
         CHECK_EQ(v.drawRate(), 1.0f / 3.0f);
         CHECK_EQ(v.eval(), 0);
-        std::cout << v << std::endl;
+        std::println("Uniform Value: {}", v);
     }
 
     SUBCASE("Zero Eval")
@@ -28,18 +28,20 @@ TEST_CASE("Value")
         CHECK_EQ(v.lossProb(), 0.5f);
         CHECK_EQ(v.drawRate(), 0.0f);
         CHECK_EQ(v.eval(), 0);
-        std::cout << v << std::endl;
+        std::println("Zero Eval: {}", v);
     }
 }
 
-TEST_CASE("PolicyBuffer") {
-    PolicyBuffer policy_buffer{19};
+TEST_CASE("PolicyBuffer")
+{
+    PolicyBuffer policy_buffer {19};
 
-    SUBCASE("Initial PolicyBuffer") {
+    SUBCASE("Initial PolicyBuffer")
+    {
         bool is_all_empty = true;
-        for (int i=0; i < 19; i++) {
-            for (int j=0; j < 19; j++) {
-                if (policy_buffer.getComputeFlag(Move{i, j})) {
+        for (int i = 0; i < 19; i++) {
+            for (int j = 0; j < 19; j++) {
+                if (policy_buffer.getComputeFlag(Move {i, j})) {
                     is_all_empty = false;
                 }
             }
@@ -47,41 +49,43 @@ TEST_CASE("PolicyBuffer") {
         CHECK_EQ(is_all_empty, true);
     }
 
-    SUBCASE("Add score to PolicyBuffer") {
+    SUBCASE("Add score to PolicyBuffer")
+    {
         // set (10, 10), (9, 10), (12, 11)
-        policy_buffer(Move{10, 10}) = 3.0;
-        policy_buffer.setComputeFlag(Move{10, 10});
-        policy_buffer(Move{9, 10}) = 2.0;
-        policy_buffer.setComputeFlag(Move{9, 10});
-        policy_buffer(Move{12, 11}) = 1.0;
-        policy_buffer.setComputeFlag(Move{12, 11});
-        CHECK_EQ(policy_buffer(Move{10, 10}), 3.0);
-        CHECK_EQ(policy_buffer.getComputeFlag(Move{10, 10}), true);
+        policy_buffer(Move {10, 10}) = 3.0;
+        policy_buffer.setComputeFlag(Move {10, 10});
+        policy_buffer(Move {9, 10}) = 2.0;
+        policy_buffer.setComputeFlag(Move {9, 10});
+        policy_buffer(Move {12, 11}) = 1.0;
+        policy_buffer.setComputeFlag(Move {12, 11});
+        CHECK_EQ(policy_buffer(Move {10, 10}), 3.0);
+        CHECK_EQ(policy_buffer.getComputeFlag(Move {10, 10}), true);
         CHECK_EQ(policy_buffer(Move(9, 10)), 2.0);
-        CHECK_EQ(policy_buffer.getComputeFlag(Move{9, 10}), true);
+        CHECK_EQ(policy_buffer.getComputeFlag(Move {9, 10}), true);
         CHECK_EQ(policy_buffer(Move(12, 11)), 1.0);
-        CHECK_EQ(policy_buffer.getComputeFlag(Move{12, 11}), true);
+        CHECK_EQ(policy_buffer.getComputeFlag(Move {12, 11}), true);
     }
 
-    SUBCASE("Apply Softmax") {
-        policy_buffer(Move{10, 10}) = 3.0;
-        policy_buffer.setComputeFlag(Move{10, 10});
-        policy_buffer(Move{9, 10}) = 2.0;
-        policy_buffer.setComputeFlag(Move{9, 10});
-        policy_buffer(Move{12, 11}) = 1.0;
-        policy_buffer.setComputeFlag(Move{12, 11});
+    SUBCASE("Apply Softmax")
+    {
+        policy_buffer(Move {10, 10}) = 3.0;
+        policy_buffer.setComputeFlag(Move {10, 10});
+        policy_buffer(Move {9, 10}) = 2.0;
+        policy_buffer.setComputeFlag(Move {9, 10});
+        policy_buffer(Move {12, 11}) = 1.0;
+        policy_buffer.setComputeFlag(Move {12, 11});
         policy_buffer.applySoftmax();
         float sum = 0.0f;
-        for (int i=0; i < 19; i++) {
-            for (int j=0; j < 19; j++) {
-                if (policy_buffer.getComputeFlag(Move{i, j})) {
-                    sum += policy_buffer(Move{i, j});
+        for (int i = 0; i < 19; i++) {
+            for (int j = 0; j < 19; j++) {
+                if (policy_buffer.getComputeFlag(Move {i, j})) {
+                    sum += policy_buffer(Move {i, j});
                 }
             }
         }
-        std::cout << policy_buffer(Move{10, 10}) << std::endl;
-        std::cout << policy_buffer(Move{9, 10}) << std::endl;
-        std::cout << policy_buffer(Move{12, 11}) << std::endl;
+        std::println("Policy Buffer (10, 10): {}", policy_buffer(Move {10, 10}));
+        std::println("Policy Buffer (9, 10): {}", policy_buffer(Move {9, 10}));
+        std::println("Policy Buffer (12, 11): {}", policy_buffer(Move {12, 11}));
         CHECK_EQ(sum, 1.0f);
     }
 }
@@ -98,6 +102,11 @@ TEST_CASE("Dummy Evaluator")
     {
         State state(initState, evaluator.get());
         state.reset();
+
+        SUBCASE("Tracing")
+        {
+            std::println("Initial state with evaluator:\n{:trace}", state);
+        }
 
         SUBCASE("Value")
         {
@@ -159,7 +168,5 @@ TEST_CASE("Dummy Evaluator")
             CHECK(prob <= 1.0f);
             CHECK(sum == doctest::Approx(1.0f));
         }
-
-        std::cout << state << std::endl;
     }
 }

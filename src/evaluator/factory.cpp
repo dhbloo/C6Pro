@@ -4,8 +4,8 @@
 #include "mix9svqnnue.h"
 
 #include <functional>
-#include <iostream>
 #include <map>
+#include <print>
 
 std::string EvaluatorName      = "dummy";  // Default evaluator name
 std::string EvaluatorModelPath = "";       // Default model path, can be set externally
@@ -34,7 +34,7 @@ auto EvaluatorFactories = []() {
         if (result)
             return std::make_unique<mix9svq::Evaluator>(std::move(result.value()));
         else {
-            std::cerr << "Failed to create mix9svqnnue evaluator: " << result.error() << std::endl;
+            std::println("Failed to create mix9svqnnue evaluator: {}", result.error());
             return std::make_unique<DummyEvaluator>(args.boardSize);
         }
     };
@@ -50,8 +50,13 @@ std::unique_ptr<Evaluator> CreateEvaluator(int boardSize, int numaNodeId)
         return it->second(EvaluatorArguments {boardSize, numaNodeId, EvaluatorModelPath});
     }
     else {
-        std::cerr << "Evaluator type '" << EvaluatorName << "' not found." << std::endl;
-        std::cerr << "Use dummy evaluator as fallback." << std::endl;
+        std::println("Evaluator type not found: {}", EvaluatorName);
+        std::print("Available evaluators: ");
+        for (const auto &pair : EvaluatorFactories) {
+            std::print("{} ", pair.first);
+        }
+        std::print("\n");
+        std::println("Use dummy evaluator as fallback.");
         return std::make_unique<DummyEvaluator>(boardSize);
     }
 }

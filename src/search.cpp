@@ -4,9 +4,8 @@
 #include "thread.h"
 
 #include <algorithm>
-#include <iomanip>
-#include <iostream>
 #include <mutex>
+#include <print>
 #include <sstream>
 
 namespace {
@@ -735,9 +734,10 @@ void SharedSearchState::recycleOldNodes()
         },
         true);
 
-    std::cout << "Reachable nodes: " << numReachableNodes.load()
-              << ", Recycled nodes: " << numRecycledNodes.load()
-              << ", Root visit: " << rootNode->getVisits() << std::endl;
+    std::println("Note stats: {} reachable, {} recycled, root visits: {}",
+                 numReachableNodes.load(),
+                 numRecycledNodes.load(),
+                 rootNode->getVisits());
 }
 
 uint32_t SharedSearchState::updateRootMovesData(MainSearchThread &th)
@@ -880,7 +880,7 @@ void MainSearchThread::search()
     runCustomTaskAndWait([](SearchThread &th) { th.SearchThread::search(); }, true);
 
     // Rank root moves and record best move
-    printSearchOutput(std::cout, true);
+    printSearchOutput(true);
     bestMove_ = rootMoves[0].movePair;
 }
 
@@ -947,12 +947,12 @@ void SearchThread::search()
             // Check if we should terminate the search
             mainTh.checkStopInSearch();
             // Print the search output with throttling
-            mainTh.printSearchOutput(std::cout, false);
+            mainTh.printSearchOutput(false);
         }
     }
 }
 
-void MainSearchThread::printSearchOutput(std::ostream &os, bool noThrottle)
+void MainSearchThread::printSearchOutput(bool noThrottle)
 {
     const SearchParams &params = sss.searchParams;
 
@@ -989,33 +989,34 @@ void MainSearchThread::printSearchOutput(std::ostream &os, bool noThrottle)
     // If we should print root moves, update the data and print them
     size_t numSelectableRootMoves = sss.updateRootMovesData(*this);
 
-    FormatGuard fg(std::cout);
-    Time        elapsed   = Now() - startTime_;
-    uint64_t    newVisits = sss.pool.newVisitsSearched();
-    uint64_t    playouts  = sss.pool.playoutsSearched();
-    auto        pvText    = [](const std::vector<Move> &pv) -> std::string {
-        std::stringstream out;
-        for (size_t i = 0; i < pv.size(); i++) {
-            if (i)
-                out << ' ';
-            out << pv[i];
-        }
-        return out.str();
+    Time     elapsed   = Now() - startTime_;
+    uint64_t newVisits = sss.pool.newVisitsSearched();
+    uint64_t playouts  = sss.pool.playoutsSearched();
+    auto     pvText    = [](const std::vector<Move> &pv) -> std::string {
+        std::string result;
+        for (size_t i = 0; i < pv.size(); i++)
+            std::format_to(std::back_inserter(result), "{}{}", i ? " " : "", pv[i]);
+        return result;
     };
 
-    std::cout << std::fixed << std::setprecision(2);
     for (size_t pvIdx = 0; pvIdx < std::min(numSelectableRootMoves, rootMoves.size()); pvIdx++) {
         RootMove &curMove = rootMoves[pvIdx];
 
-        std::cout << "(" << pvIdx + 1 << ") " << curMove.value << " (W " << (curMove.winRate * 100)
-                  << ", D " << (curMove.drawRate * 100) << ", S " << curMove.utilityStdev
-                  << ") | V " << nodesText(curMove.edgeVisits) << " | SD " << curMove.selDepth
-                  << " | " << pvText(curMove.pv) << std::endl;
+        std::print("({}) {}", pvIdx + 1, curMove.value);
+        std::print(" | (W {:.2f}, D {:.2f}, S {:.2f})",
+                   curMove.winRate * 100,
+                   curMove.drawRate * 100,
+                   curMove.utilityStdev);
+        std::print(" | V {}", nodesText(curMove.edgeVisits));
+        std::print(" | SD {}", curMove.selDepth);
+        std::print(" | {}\n", pvText(curMove.pv));
     }
 
-    std::cout << "Speed " << speedText(newVisits * 1000 / std::max(elapsed, (Time)1)) << " | Visit "
-              << nodesText(newVisits) << " | Playout " << nodesText(playouts) << " | Time "
-              << timeText(elapsed) << std::endl;
+    std::println("Speed {} | Visit {} | Playout {} | Time {}",
+                 speedText(newVisits * 1000 / std::max(elapsed, (Time)1)),
+                 nodesText(newVisits),
+                 nodesText(playouts),
+                 timeText(elapsed));
 }
 
 void MainSearchThread::setupTimeControl()

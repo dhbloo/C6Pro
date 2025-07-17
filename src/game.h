@@ -2,7 +2,9 @@
 
 #include <compare>
 #include <cstdint>
-#include <ostream>
+#include <format>
+#include <string>
+#include <string_view>
 #include <vector>
 
 // --------------------------------------------------------
@@ -22,8 +24,21 @@ constexpr Player operator~(const Player p)
     return static_cast<Player>(1 - p);
 }
 
-/// Stringify the player to the stream.
-std::ostream &operator<<(std::ostream &os, const Player p);
+/// Formatter for the Player type.
+template <>
+struct std::formatter<Player> : std::formatter<std::string_view>
+{
+    auto format(Player p, std::format_context &ctx) const
+    {
+        std::string_view name;
+        switch (p) {
+        case P_FIRST: name = "First"; break;
+        case P_SECOND: name = "Second"; break;
+        default: name = "Unknown"; break;
+        }
+        return std::formatter<std::string_view>::format(name, ctx);
+    }
+};
 
 // --------------------------------------------------------
 
@@ -125,8 +140,25 @@ constexpr int MateStep(const Eval v, const int ply)
     return EVAL_MATE - ply - (v < 0 ? -v : v);
 }
 
-/// Stringify the display eval to the stream.
-std::ostream &operator<<(std::ostream &os, const Eval ev);
+/// Formatter for the Eval type.
+template <>
+struct std::formatter<Eval> : std::formatter<std::string>
+{
+    auto format(Eval ev, std::format_context &ctx) const
+    {
+        std::string result;
+        if (ev == EVAL_NONE)
+            result = "NONE";
+        else if (ev >= EVAL_MATE_IN_MAX_PLY)
+            result = "+M" + std::to_string(static_cast<int>(EVAL_MATE - ev));
+        else if (ev <= EVAL_MATED_IN_MAX_PLY)
+            result = "-M" + std::to_string(static_cast<int>(EVAL_MATE + ev));
+        else
+            result = std::to_string(static_cast<int>(ev));
+
+        return std::formatter<std::string>::format(result, ctx);
+    }
+};
 
 // --------------------------------------------------------
 
@@ -174,8 +206,23 @@ private:
 inline constexpr Move Move::None {0};
 inline constexpr Move Move::Pass {Move::MAX_MOVES};
 
-/// Stringify the display move to the stream.
-std::ostream &operator<<(std::ostream &os, const Move p);
+/// Formatter for the Move type.
+template <>
+struct std::formatter<Move> : std::formatter<std::string>
+{
+    auto format(Move p, std::format_context &ctx) const
+    {
+        std::string result;
+        if (p.isPass())
+            result = "PS";
+        else {
+            result += static_cast<char>(p.x() + 'A');
+            result += std::to_string(p.y() + 1);
+        }
+
+        return std::formatter<std::string>::format(result, ctx);
+    }
+};
 
 // --------------------------------------------------------
 
@@ -244,8 +291,24 @@ constexpr Color operator~(const Color c)
     return opponents[c];
 }
 
-/// Stringify the color to the stream.
-std::ostream &operator<<(std::ostream &out, const Color color);
+/// Formatter for the Color type.
+template <>
+struct std::formatter<Color> : std::formatter<char>
+{
+    auto format(Color color, std::format_context &ctx) const
+    {
+        char c;
+        switch (color) {
+        case C_BLACK: c = 'X'; break;
+        case C_WHITE: c = 'O'; break;
+        case C_EMPTY: c = '.'; break;
+        case C_GAP: c = '*'; break;
+        default: c = ' '; break;
+        }
+
+        return std::formatter<char>::format(c, ctx);
+    }
+};
 
 /// State class represents a board position state.
 /// For simplicity of implementation, it also records the whole move history info, to ease the
@@ -340,6 +403,14 @@ public:
     /// @return A (unsorted) list of all legal moves.
     [[nodiscard]] std::vector<Move> getLegalMoves(bool includePass = false) const;
 
+    // --------------------------------------------------------
+    // String representation
+
+    /// Get the string representation of the position.
+    std::string positionString() const;
+    /// Get the string representation of the position for tracing.
+    std::string traceString() const;
+
 private:
     // Bitkeys of 4 directions and black/white colors. (bit=1 for empty, bit=0 for occupied)
     uint32_t bitKey0_[Move::MAX_BOARD_SIZE][2] {};          // [RIGHT(MSB) - LEFT(LSB)]
@@ -359,6 +430,42 @@ private:
     Color getColorAt(int x, int y) const;
     /// Flip the bit of the given color at the given position.
     void flipBit(Color c, int x, int y);
-    /// Output the state for debugging
-    friend std::ostream &operator<<(std::ostream &out, const State &state);
+
+    friend struct std::formatter<State>;
+};
+
+/// Formatter for the State type, which provides a detailed trace string of the state.
+template <>
+struct std::formatter<State> : std::formatter<std::string>
+{
+    enum class FormatType { Position, Trace };
+    FormatType format_type = FormatType::Position;
+
+    constexpr auto parse(std::format_parse_context &ctx)
+    {
+        auto it  = ctx.begin();
+        auto end = ctx.end();
+
+        if (it != end && *it != '}') {
+            std::string_view format_str;
+            auto             start = it;
+            while (it != end && *it != '}')
+                ++it;
+            format_str = std::string_view(start, it);
+
+            if (format_str == "trace")
+                format_type = FormatType::Trace;
+            else if (!format_str.empty())
+                throw std::format_error("Invalid State format specifier");
+        }
+
+        return it;
+    }
+
+    auto format(const State &state, std::format_context &ctx) const
+    {
+        std::string result =
+            (format_type == FormatType::Trace) ? state.traceString() : state.positionString();
+        return std::formatter<std::string>::format(result, ctx);
+    }
 };

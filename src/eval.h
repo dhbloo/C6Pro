@@ -3,7 +3,7 @@
 #include "game.h"
 
 #include <cstdint>
-#include <ostream>
+#include <format>
 
 /// The scaling factor used to convert between winning rate and value.
 static constexpr float ScalingFactor = 200.0f;
@@ -41,8 +41,45 @@ private:
     Eval  eval_;
 };
 
-/// Stringify the value to the stream.
-std::ostream &operator<<(std::ostream &out, const Value value);
+/// Formatter for the Value type.
+template <>
+struct std::formatter<Value>
+{
+    std::string format_spec;
+
+    constexpr auto parse(std::format_parse_context &ctx)
+    {
+        auto it    = ctx.begin();
+        auto end   = ctx.end();
+        auto start = it;
+        while (it != end && *it != '}')
+            ++it;
+        format_spec = std::string_view(start, it);
+        return it;
+    }
+
+    auto format(const Value &value, std::format_context &ctx) const
+    {
+        std::string fmt    = format_spec.empty() ? "{}" : "{:" + format_spec + "}";
+        auto        wl     = value.winLossRate();
+        auto        wr     = value.winningRate();
+        auto        ev     = value.eval();
+        auto        win    = value.winProb();
+        auto        loss   = value.lossProb();
+        auto        draw   = value.drawRate();
+        auto        result = std::format("(WL: {}, WR: {}, EV: {}, W|L|D: {}|{}|{})",
+                                  std::vformat(fmt, std::make_format_args(wl)),
+                                  std::vformat(fmt, std::make_format_args(wr)),
+                                  std::vformat(fmt, std::make_format_args(ev)),
+                                  std::vformat(fmt, std::make_format_args(win)),
+                                  std::vformat(fmt, std::make_format_args(loss)),
+                                  std::vformat(fmt, std::make_format_args(draw)));
+
+        return std::format_to(ctx.out(), "{}", result);
+    }
+};
+
+// --------------------------------------------------------
 
 /// PolicyBuffer represents an policy distribution for the game actions.
 class PolicyBuffer
@@ -72,6 +109,8 @@ private:
     uint32_t computeFlagKey_[32];
     float    policy_[Move::MAX_MOVES + 1];
 };
+
+// --------------------------------------------------------
 
 /// Evaluator is the base class for evaluation plugins.
 /// It provides overridable hook over board move/undo update, and interface for doing value
